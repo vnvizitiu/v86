@@ -10,7 +10,9 @@
 <div>
     <div id="boot_options">
         <h4>Debugger</h4>
+        <input type="button" value="Windows 98" id="start_windows98">
         <input type="button" value="Arch Linux" id="start_archlinux">
+        <input type="button" value="Oberon" id="start_oberon">
         <input type="button" value="KolibriOS" id="start_kolibrios">
         <input type="button" value="Linux 2.6" id="start_linux26">
         <input type="button" value="Linux 3.18" id="start_linux3">
@@ -123,6 +125,7 @@
         <input type="button" value="Dump GDT/LDT" id="dump_gdt">
         <input type="button" value="Dump IDT" id="dump_idt">
         <input type="button" value="Dump page tables" id="dump_pt">
+        <input type="button" value="Dump log" id="dump_log">
         <br>
 
         <input type="button" value="Pause" id="run">
@@ -131,11 +134,13 @@
         <input type="button" value="Send Ctrl-Alt-Del" id="ctrlaltdel">
         <input type="button" value="Send Alt-Tab" id="alttab">
         <input type="button" value="Get floppy image" id="get_fda_image">
-        <input type="button" value="Get floppy image" id="get_fdb_image">
-        <input type="button" value="Get HDA image" id="get_hda_image">
-        <input type="button" value="Get HDB image" id="get_hdb_image">
+        <input type="button" value="Get second floppy image" id="get_fdb_image">
+        <input type="button" value="Get hard disk image" id="get_hda_image">
+        <input type="button" value="Get second hard disk image" id="get_hdb_image">
+        <input type="button" value="Get cdrom image" id="get_cdrom_image">
         <input type="button" value="Save State" id="save_state">
-        <input type="button" value="Memory Dump" id="memory_dump">
+        <input type="button" value="Load State" id="load_state"> <input type="file" style="display: none" id="load_state_input">
+        <input type="button" value="Memory Dump (raw)" id="memory_dump">
         <input type="button" value="Disable mouse" id="toggle_mouse">
         <input type="button" value="Lock mouse" id="lock_mouse">
         <input type="button" value="Go fullscreen" id="fullscreen">

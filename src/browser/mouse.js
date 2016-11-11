@@ -38,7 +38,6 @@ function MouseAdapter(bus, screen_container)
         window.removeEventListener("touchend", touch_end_handler, false);
         window.removeEventListener("touchmove", mousemove_handler, false);
         window.removeEventListener("mousemove", mousemove_handler, false);
-        document.removeEventListener("contextmenu", contextmenu_handler, false);
         window.removeEventListener("mousedown", mousedown_handler, false);
         window.removeEventListener("mouseup", mouseup_handler, false);
         window.removeEventListener("DOMMouseScroll", mousewheel_handler, false);
@@ -57,7 +56,6 @@ function MouseAdapter(bus, screen_container)
         window.addEventListener("touchend", touch_end_handler, false);
         window.addEventListener("touchmove", mousemove_handler, false);
         window.addEventListener("mousemove", mousemove_handler, false);
-        document.addEventListener("contextmenu", contextmenu_handler, false);
         window.addEventListener("mousedown", mousedown_handler, false);
         window.addEventListener("mouseup", mouseup_handler, false);
         window.addEventListener("DOMMouseScroll", mousewheel_handler, false);
@@ -189,22 +187,14 @@ function MouseAdapter(bus, screen_container)
             delta_y = delta_y * SPEED_FACTOR;
         }
 
-        if(Math.abs(delta_x) > 100 || Math.abs(delta_y) > 100)
-        {
-            // Large mouse delta, drop?
-        }
+        //if(Math.abs(delta_x) > 100 || Math.abs(delta_y) > 100)
+        //{
+        //    // Large mouse delta, drop?
+        //}
 
         delta_y = -delta_y;
 
         mouse.bus.send("mouse-delta", [delta_x, delta_y]);
-    }
-
-    function contextmenu_handler(e)
-    {
-        if(may_handle(e))
-        {
-            e.preventDefault();
-        }
     }
 
     function mousedown_handler(e)
@@ -247,8 +237,6 @@ function MouseAdapter(bus, screen_container)
             console.log("Unknown event.which: " + e.which);
         }
         mouse.bus.send("mouse-click", [left_down, middle_down, right_down]);
-
-        e.preventDefault();
     }
 
     function mousewheel_handler(e)

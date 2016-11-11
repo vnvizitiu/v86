@@ -18,9 +18,6 @@
  * bsf, bsr
  *
  * popcnt
- *
- * Gets #included by cpu.macro.js
- *
 */
 "use strict";
 
@@ -69,16 +66,6 @@ CPU.prototype.adc = function(dest_operand, source_operand, op_size)
     this.flags_changed = flags_all;
 
     return this.last_result;
-}
-
-CPU.prototype.cmp = function(dest_operand, source_operand, op_size)
-{
-    this.last_add_result = dest_operand;
-    this.last_op2 = source_operand;
-    this.last_op1 = this.last_result = dest_operand - source_operand | 0;
-
-    this.last_op_size = op_size;
-    this.flags_changed = flags_all;
 }
 
 CPU.prototype.sub = function(dest_operand, source_operand, op_size)
@@ -288,8 +275,6 @@ CPU.prototype.imul_reg16 = function(operand1, operand2)
     return result;
 }
 
-var mul32_result = new Int32Array(2);
-
 CPU.prototype.do_mul32 = function(a, b)
 {
     var a00 = a & 0xFFFF;
@@ -300,9 +285,9 @@ CPU.prototype.do_mul32 = function(a, b)
     var mid = (low_result >>> 16) + (a16 * b00 | 0) | 0;
     var high_result = mid >>> 16;
     mid = (mid & 0xFFFF) + (a00 * b16 | 0) | 0;
-    mul32_result[0] = (mid << 16) | low_result & 0xFFFF;
-    mul32_result[1] = ((mid >>> 16) + (a16 * b16 | 0) | 0) + high_result | 0;
-    return mul32_result;
+    this.mul32_result[0] = (mid << 16) | low_result & 0xFFFF;
+    this.mul32_result[1] = ((mid >>> 16) + (a16 * b16 | 0) | 0) + high_result | 0;
+    return this.mul32_result;
 };
 
 CPU.prototype.do_imul32 = function(a, b)
@@ -416,6 +401,7 @@ CPU.prototype.div8 = function(source_operand)
     if(source_operand === 0)
     {
         this.trigger_de();
+        return;
     }
 
     var target_operand = this.reg16[reg_ax],
@@ -439,6 +425,7 @@ CPU.prototype.idiv8 = function(source_operand)
     if(source_operand === 0)
     {
         this.trigger_de();
+        return;
     }
 
     var target_operand = this.reg16s[reg_ax],
@@ -462,6 +449,7 @@ CPU.prototype.div16 = function(source_operand)
     if(source_operand === 0)
     {
         this.trigger_de();
+        return;
     }
 
     var
@@ -486,6 +474,7 @@ CPU.prototype.idiv16 = function(source_operand)
     if(source_operand === 0)
     {
         this.trigger_de();
+        return;
     }
 
     var target_operand = this.reg16[reg_ax] | (this.reg16[reg_dx] << 16),
@@ -501,8 +490,6 @@ CPU.prototype.idiv16 = function(source_operand)
         this.reg16[reg_dx] = target_operand % source_operand;
     }
 }
-
-var div32_result = new Float64Array(2);
 
 // If the dividend is too large, the division cannot be done precisely using
 // JavaScript's double floating point numbers. Run simple long divsion until
@@ -550,9 +537,9 @@ CPU.prototype.do_div32 = function(div_low, div_high, quot)
     var mod = div % quot;
     result += div / quot | 0;
 
-    div32_result[0] = result;
-    div32_result[1] = mod;
-    return div32_result;
+    this.div32_result[0] = result;
+    this.div32_result[1] = mod;
+    return this.div32_result;
 }
 
 
@@ -1399,42 +1386,42 @@ CPU.prototype.btc_mem = function(virt_addr, bit_offset)
 {
     dbg_assert(bit_offset >= 0);
     var phys_addr = this.translate_address_write(virt_addr + (bit_offset >> 3) | 0);
-    var bit_base = this.memory.read8(phys_addr);
+    var bit_base = this.read8(phys_addr);
 
     bit_offset &= 7;
 
     this.flags = (this.flags & ~1) | (bit_base >> bit_offset & 1);
     this.flags_changed &= ~1;
 
-    this.memory.write8(phys_addr, bit_base ^ 1 << bit_offset);
+    this.write8(phys_addr, bit_base ^ 1 << bit_offset);
 }
 
 CPU.prototype.btr_mem = function(virt_addr, bit_offset)
 {
     dbg_assert(bit_offset >= 0);
     var phys_addr = this.translate_address_write(virt_addr + (bit_offset >> 3) | 0);
-    var bit_base = this.memory.read8(phys_addr);
+    var bit_base = this.read8(phys_addr);
 
     bit_offset &= 7;
 
     this.flags = (this.flags & ~1) | (bit_base >> bit_offset & 1);
     this.flags_changed &= ~1;
 
-    this.memory.write8(phys_addr, bit_base & ~(1 << bit_offset));
+    this.write8(phys_addr, bit_base & ~(1 << bit_offset));
 }
 
 CPU.prototype.bts_mem = function(virt_addr, bit_offset)
 {
     dbg_assert(bit_offset >= 0);
     var phys_addr = this.translate_address_write(virt_addr + (bit_offset >> 3) | 0);
-    var bit_base = this.memory.read8(phys_addr);
+    var bit_base = this.read8(phys_addr);
 
     bit_offset &= 7;
 
     this.flags = (this.flags & ~1) | (bit_base >> bit_offset & 1);
     this.flags_changed &= ~1;
 
-    this.memory.write8(phys_addr, bit_base | 1 << bit_offset);
+    this.write8(phys_addr, bit_base | 1 << bit_offset);
 }
 
 CPU.prototype.bsf16 = function(old, bit_base)

@@ -5,9 +5,9 @@
  * Devices register their ports here
  *
  * @constructor
- * @param {Memory} memory
+ * @param {CPU} cpu
  */
-function IO(memory)
+function IO(cpu)
 {
     /** @const */
     this.ports = [];
@@ -15,8 +15,8 @@ function IO(memory)
     /* const */
     this.devices = Array(0x10000);
 
-    /** @const @type {Memory} */
-    this.memory = memory;
+    /** @const @type {CPU} */
+    this.cpu = cpu;
 
 
     for(var i = 0; i < 0x10000; i++)
@@ -34,13 +34,13 @@ function IO(memory)
         };
     }
 
-    var memory_size = memory.size;
+    var memory_size = cpu.memory_size;
 
     for(var i = 0; (i << MMAP_BLOCK_BITS) < memory_size; i++)
     {
         // avoid sparse arrays
-        memory.memory_map_read8[i] = memory.memory_map_write8[i] = undefined;
-        memory.memory_map_read32[i] = memory.memory_map_write32[i] = undefined;
+        cpu.memory_map_read8[i] = cpu.memory_map_write8[i] = undefined;
+        cpu.memory_map_read32[i] = cpu.memory_map_write32[i] = undefined;
     }
 
     this.mmap_register(memory_size, 0x100000000 - memory_size,
@@ -103,7 +103,7 @@ IO.prototype.register_read = function(port_addr, device, r8, r16, r32)
     if(DEBUG)
     {
         var fail = function(n) {
-            dbg_assert(false, "Overlapped read" + n + " " + h(port_addr, 4));
+            dbg_assert(false, "Overlapped read" + n + " " + h(port_addr, 4) + " (" + device.name + ")");
             return -1 >>> (32 - n) | 0;
         };
         if(!r8) r8 = fail.bind(this, 8);
@@ -136,7 +136,7 @@ IO.prototype.register_write = function(port_addr, device, w8, w16, w32)
     if(DEBUG)
     {
         var fail = function(n) {
-            dbg_assert(false, "Overlapped write" + n + " " + h(port_addr));
+            dbg_assert(false, "Overlapped write" + n + " " + h(port_addr) + " (" + device.name + ")");
         };
         if(!w8) w8 = fail.bind(this, 8);
         if(!w16) w16 = fail.bind(this, 16);
@@ -253,7 +253,7 @@ IO.prototype.in_mmap_range = function(start, count)
 
     var end = start + count;
 
-    if(end >= this.memory.size)
+    if(end >= this.cpu.memory_size)
     {
         return true;
     }
@@ -263,7 +263,7 @@ IO.prototype.in_mmap_range = function(start, count)
 
     while(start < end)
     {
-        if(this.memory.memory_map_registered[start >> MMAP_BLOCK_BITS])
+        if(this.cpu.in_mapped_range(start))
         {
             return true;
         }
@@ -277,7 +277,7 @@ IO.prototype.in_mmap_range = function(start, count)
 IO.prototype.mmap_read32_shim = function(addr)
 {
     var aligned_addr = addr >>> MMAP_BLOCK_BITS;
-    var fn = this.memory.memory_map_read8[aligned_addr];
+    var fn = this.cpu.memory_map_read8[aligned_addr];
 
     return fn(addr) | fn(addr + 1) << 8 |
             fn(addr + 2) << 16 | fn(addr + 3) << 24;
@@ -286,7 +286,7 @@ IO.prototype.mmap_read32_shim = function(addr)
 IO.prototype.mmap_write32_shim = function(addr, value)
 {
     var aligned_addr = addr >>> MMAP_BLOCK_BITS;
-    var fn = this.memory.memory_map_write8[aligned_addr];
+    var fn = this.cpu.memory_map_write8[aligned_addr];
 
     fn(addr, value & 0xFF);
     fn(addr + 1, value >> 8 & 0xFF);
@@ -319,12 +319,10 @@ IO.prototype.mmap_register = function(addr, size, read_func8, write_func8, read_
 
     for(; size > 0; aligned_addr++)
     {
-        this.memory.memory_map_registered[aligned_addr] = 1;
-
-        this.memory.memory_map_read8[aligned_addr] = read_func8;
-        this.memory.memory_map_write8[aligned_addr] = write_func8;
-        this.memory.memory_map_read32[aligned_addr] = read_func32;
-        this.memory.memory_map_write32[aligned_addr] = write_func32;
+        this.cpu.memory_map_read8[aligned_addr] = read_func8;
+        this.cpu.memory_map_write8[aligned_addr] = write_func8;
+        this.cpu.memory_map_read32[aligned_addr] = read_func32;
+        this.cpu.memory_map_write32[aligned_addr] = write_func32;
 
         size -= MMAP_BLOCK_SIZE;
     }
@@ -384,7 +382,9 @@ IO.prototype.port_read8 = function(port_addr)
             LOG_IO
         );
     }
-    return entry.read8.call(entry.device);
+    var value = entry.read8.call(entry.device);
+    dbg_assert(value < 0x100, "8 bit port returned large value: " + h(port_addr));
+    return value;
 };
 
 IO.prototype.port_read16 = function(port_addr)
@@ -398,7 +398,9 @@ IO.prototype.port_read16 = function(port_addr)
             LOG_IO
         );
     }
-    return entry.read16.call(entry.device);
+    var value = entry.read16.call(entry.device);
+    dbg_assert(value < 0x10000, "16 bit port returned large value: " + h(port_addr));
+    return value;
 };
 
 IO.prototype.port_read32 = function(port_addr)

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
-var TIMEOUT_EXTRA_FACTOR = 1;
+var TIMEOUT_EXTRA_FACTOR = +process.env.TIMEOUT_EXTRA_FACTOR || 1;
+var MAX_PARALLEL_TESTS = +process.env.MAX_PARALLEL_TESTS || 4;
+var TEST_NAME = process.env.TEST_NAME;
 
 try
 {
@@ -25,9 +27,24 @@ function readfile(path)
     return new Uint8Array(fs.readFileSync(path)).buffer;
 }
 
+function get_line(screen, y)
+{
+    return screen.subarray(y * SCREEN_WIDTH, (y + 1) * SCREEN_WIDTH);
+}
+
 function line_to_text(screen, y)
 {
-    return String.fromCharCode.apply(String, screen.subarray(y * SCREEN_WIDTH, (y + 1) * SCREEN_WIDTH));
+    return bytearray_to_string(get_line(screen, y));
+}
+
+function string_to_bytearray(str)
+{
+    return new Uint8Array(str.split("").map(chr => chr.charCodeAt(0)));
+}
+
+function bytearray_to_string(arr)
+{
+    return String.fromCharCode.apply(String, arr);
 }
 
 function screen_to_text(s)
@@ -82,7 +99,7 @@ if(cluster.isMaster)
             expect_mouse_registered: true,
             actions: [
                 {
-                    after: 5,
+                    on_text: " or press",
                     run: "\n"
                 },
             ],
@@ -90,7 +107,7 @@ if(cluster.isMaster)
         {
             name: "Linux",
             cdrom: root_path + "/images/linux.iso",
-            timeout: 75,
+            timeout: 90,
             expected_texts: [
                 "/root%",
                 "test passed",
@@ -103,20 +120,21 @@ if(cluster.isMaster)
             ],
         },
         {
-            name: "Linux with Bochs BIOS",
-            cdrom: root_path + "/images/linux.iso",
-            timeout: 75,
-            expected_texts: [
-                "/root%",
-                "test passed",
-            ],
-            alternative_bios: true,
-            actions: [
-                {
-                    on_text: "/root%",
-                    run: "cd tests; ./test-i386 > emu.test; diff emu.test reference.test > /dev/null && echo test pas''sed || echo failed\n",
-                },
-            ],
+            name: "Windows 98",
+            hda: root_path + "/images/windows98.img",
+            timeout: 60,
+            expect_graphical_mode: true,
+            expect_graphical_size: [800, 600],
+            expect_mouse_registered: true,
+            skip_if_disk_image_missing: true,
+        },
+        {
+            name: "Oberon",
+            hda: root_path + "/images/oberon.dsk",
+            fda: root_path + "/images/oberon-boot.dsk",
+            timeout: 20,
+            expect_graphical_mode: true,
+            expect_mouse_registered: true,
         },
         {
             name: "Linux 3",
@@ -140,6 +158,22 @@ if(cluster.isMaster)
             expect_mouse_registered: true,
         },
         {
+            name: "Linux with Bochs BIOS",
+            cdrom: root_path + "/images/linux.iso",
+            timeout: 90,
+            expected_texts: [
+                "/root%",
+                "test passed",
+            ],
+            alternative_bios: true,
+            actions: [
+                {
+                    on_text: "/root%",
+                    run: "cd tests; ./test-i386 > emu.test; diff emu.test reference.test > /dev/null && echo test pas''sed || echo failed\n",
+                },
+            ],
+        },
+        {
             name: "OpenBSD",
             fda: root_path + "/images/openbsd.img",
             timeout: 180,
@@ -147,7 +181,12 @@ if(cluster.isMaster)
         },
     ];
 
-    var nr_of_cpus = Math.min(os.cpus().length - 1 || 1, tests.length);
+    if(TEST_NAME)
+    {
+        tests = tests.filter(test => test.name === TEST_NAME);
+    }
+
+    var nr_of_cpus = Math.min(Math.round(os.cpus().length / 2) || 1, tests.length, MAX_PARALLEL_TESTS);
     console.log("Using %d cpus", nr_of_cpus);
 
     var current_test = 0;
@@ -178,16 +217,6 @@ if(cluster.isMaster)
             {
                 process.exit(code);
             }
-
-            var remaining_tests = 0;
-
-            for(let i in cluster.workers)
-            {
-                if(cluster.workers[i].state === "online")
-                {
-                    remaining_tests++;
-                }
-            }
         });
 
         worker.on("error", function(error)
@@ -206,6 +235,18 @@ else
             process.send("I'm done");
         });
     });
+}
+
+function bytearray_starts_with(arr, search)
+{
+    for(var i = 0; i < search.length; i++)
+    {
+        if(arr[i] !== search[i])
+        {
+            return false
+        }
+    }
+    return true;
 }
 
 function run_test(test, done)
@@ -229,19 +270,50 @@ function run_test(test, done)
         autostart: true,
     };
 
-    console.assert(test.cdrom || test.fda, "Bootable drive expected");
+    console.assert(test.cdrom || test.fda || test.hda, "Bootable drive expected");
 
-    if(test.cdrom)
+    try
     {
-        settings.cdrom = { buffer: readfile(test.cdrom) };
+        if(test.cdrom)
+        {
+            settings.cdrom = { buffer: readfile(test.cdrom) };
+        }
+        if(test.fda)
+        {
+            settings.fda = { buffer: readfile(test.fda) };
+        }
+        if(test.hda)
+        {
+            settings.hda = { buffer: readfile(test.hda) };
+        }
+    }
+    catch(e)
+    {
+        if(e.code !== "ENOENT")
+        {
+            throw e;
+        }
+
+        if(test.skip_if_disk_image_missing)
+        {
+            console.warn("Missing disk image: " + e.path + ", test skipped");
+            console.warn();
+
+            done();
+            return;
+        }
+        else
+        {
+            console.warn("Missing disk image: " + e.path);
+            process.exit(1);
+        }
     }
 
-    if(test.fda)
+    if(test.expected_texts)
     {
-        settings.fda = { buffer: readfile(test.fda) };
+        test.expected_texts = test.expected_texts.map(string_to_bytearray);
     }
-
-    if(!test.expected_texts)
+    else
     {
         test.expected_texts = [];
     }
@@ -261,9 +333,10 @@ function run_test(test, done)
     }
 
     var graphical_test_done = false;
+    var size_test_done = false;
     function check_grapical_test_done()
     {
-        return !test.expect_graphical_mode || graphical_test_done;
+        return !test.expect_graphical_mode || (graphical_test_done && (!test.expect_graphical_size ||  size_test_done));
     }
 
     var test_start = Date.now();
@@ -283,13 +356,14 @@ function run_test(test, done)
 
         if(check_text_test_done() && check_mouse_test_done() && check_grapical_test_done())
         {
+            var end = Date.now();
+
             clearTimeout(timeout);
             stopped = true;
 
             emulator.stop();
 
-            console.warn("Passed test: %s", test.name);
-            console.warn("Took %ds", (Date.now() - test_start) / 1000);
+            console.warn("Passed test: %s (took %ds)", test.name, (end - test_start) / 1000);
             console.warn();
 
             done();
@@ -307,7 +381,7 @@ function run_test(test, done)
 
             if(!check_text_test_done())
             {
-                console.warn('Expected text "%s" after %d seconds.', test.expected_texts[0], timeout_seconds);
+                console.warn('Expected text "%s" after %d seconds.', bytearray_to_string(test.expected_texts[0]), timeout_seconds);
             }
 
             if(!check_grapical_test_done())
@@ -336,6 +410,16 @@ function run_test(test, done)
         check_test_done();
     });
 
+    emulator.add_listener("screen-set-size-graphical", function(size)
+    {
+        if(test.expect_graphical_size)
+        {
+            size_test_done = size[0] === test.expect_graphical_size[0] &&
+                             size[1] === test.expect_graphical_size[1];
+            check_test_done();
+        }
+    });
+
     emulator.add_listener("screen-put-char", function(chr)
     {
         var y = chr[0];
@@ -343,13 +427,12 @@ function run_test(test, done)
         var code = chr[2];
         screen[x + SCREEN_WIDTH * y] = code;
 
-        var line = line_to_text(screen, y);
+        var line = get_line(screen, y);
 
         if(!check_text_test_done())
         {
-            var expected = test.expected_texts[0];
-
-            if(line.indexOf(expected) >= 0)
+            let expected = test.expected_texts[0];
+            if(x < expected.length && bytearray_starts_with(line, expected))
             {
                 test.expected_texts.shift();
                 check_test_done();
@@ -358,7 +441,8 @@ function run_test(test, done)
 
         if(on_text.length)
         {
-            if(line.indexOf(on_text[0].text) >= 0)
+            let expected = on_text[0].text;
+            if(x < expected.length && bytearray_starts_with(line, expected))
             {
                 var action = on_text.shift();
                 emulator.keyboard_send_text(action.run);
@@ -370,14 +454,7 @@ function run_test(test, done)
     {
         if(action.on_text)
         {
-            on_text.push({ text: action.on_text, run: action.run, });
-        }
-
-        if(action.after !== undefined)
-        {
-            setTimeout(function() {
-                emulator.keyboard_send_text(action.run);
-            }, action.after * 1000 * TIMEOUT_EXTRA_FACTOR);
+            on_text.push({ text: string_to_bytearray(action.on_text), run: action.run, });
         }
     });
 }

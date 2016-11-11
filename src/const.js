@@ -85,10 +85,10 @@ var
 
 var
     /** @const */
-    ENABLE_HPET = false,
+    ENABLE_HPET = !DEBUG && false,
 
     /** @const */
-    ENABLE_ACPI = false;
+    ENABLE_ACPI = !DEBUG && false;
 
 var
 
@@ -191,7 +191,7 @@ PSE_ENABLED = 128,
 
 
 /** @const */ LOOP_COUNTER = 11001,
-/** @const */ TIME_PER_FRAME = 33;
+/** @const */ TIME_PER_FRAME = 8;
 
 /** @const */
 var OP_TRANSLATION = false;
@@ -305,6 +305,9 @@ var MSR_SMI_COUNT = 0x34;
 
 /** @const */
 var IA32_MCG_CAP = 0x179;
+
+/** @const */
+var MSR_PKG_C2_RESIDENCY = 0x60D;
 
 
 

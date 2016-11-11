@@ -1,4 +1,5 @@
-CLOSURE=closure-compiler/compiler.jar
+CLOSURE_DIR=closure-compiler
+CLOSURE=$(CLOSURE_DIR)/compiler.jar
 BROWSER=chromium
 
 all: build/v86_all.js
@@ -13,12 +14,19 @@ CLOSURE_SOURCE_MAP=\
 		--create_source_map '%outname%.map'
 
 		#--jscomp_error reportUnknownTypes\
+		#--jscomp_error unusedLocalVariables\
+		#--jscomp_error unusedPrivateMembers\
+		#--new_type_inf\
+
+		# Easily breaks code:
+		#--assume_function_wrapper\
 
 CLOSURE_FLAGS=\
+	        --js lib/closure-base.js\
+		--generate_exports\
 		--compilation_level ADVANCED_OPTIMIZATIONS\
 		--externs src/externs.js\
 		--warning_level VERBOSE\
-		--jscomp_off uselessCode\
 		--jscomp_error accessControls\
 		--jscomp_error ambiguousFunctionDecl\
 		--jscomp_error checkEventfulObjectDisposal\
@@ -57,8 +65,6 @@ CLOSURE_FLAGS=\
 		--use_types_for_optimization\
 		--summary_detail_level 3\
 		--language_in ECMASCRIPT5_STRICT
-
-		#--new_type_inf\
 
 
 TRANSPILE_ES6_FLAGS=\
@@ -110,8 +116,8 @@ build/libv86.js: $(CLOSURE) src/*.js lib/*.js src/browser/*.js
 	ls -lh build/libv86.js
 
 clean:
-	rm build/libv86.js
-	rm build/v86_all.js
+	-rm build/libv86.js
+	-rm build/v86_all.js
 
 run:
 	python2 -m SimpleHTTPServer 2> /dev/null
@@ -129,8 +135,10 @@ update_version:
 
 
 $(CLOSURE):
-	wget -P closure-compiler http://dl.google.com/closure-compiler/compiler-latest.zip
-	unzip -d closure-compiler closure-compiler/compiler-latest.zip compiler.jar
+	wget -P $(CLOSURE_DIR) http://dl.google.com/closure-compiler/compiler-latest.zip
+	unzip -d closure-compiler $(CLOSURE_DIR)/compiler-latest.zip \*.jar
+	mv $(CLOSURE_DIR)/*.jar $(CLOSURE)
+	rm $(CLOSURE_DIR)/compiler-latest.zip
 
-test: build/libv86.js
+tests: build/libv86.js
 	./tests/full/run.js

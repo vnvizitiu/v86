@@ -125,6 +125,8 @@ function Ne2k(cpu, bus)
         this.memory[i << 1] = this.memory[i << 1 | 1] = mac[i];
     }
 
+    this.memory[14] = this.memory[15] = 0x57;
+
     dbg_log("Mac: " + h(mac[0], 2) + ":" +
                       h(mac[1], 2) + ":" +
                       h(mac[2], 2) + ":" +
@@ -486,7 +488,7 @@ function Ne2k(cpu, bus)
     });
 
     io.register_read(this.port | NE_DATAPORT | 0, this,
-            this.data_port_read16,
+            this.data_port_read8,
             this.data_port_read16,
             this.data_port_read32);
     io.register_write(this.port | NE_DATAPORT | 0, this,
@@ -550,6 +552,12 @@ Ne2k.prototype.data_port_write = function(data_byte)
                             " rsar=" + h(this.rsar, 4) +
                             " rcnt=" + h(this.rcnt, 4), LOG_NET);
 
+    if(this.rsar > 0x10 && this.rsar < (START_PAGE << 8))
+    {
+        // unmapped
+        return;
+    }
+
     this.rcnt--;
     this.memory[this.rsar++] = data_byte;
 
@@ -602,6 +610,11 @@ Ne2k.prototype.data_port_read = function()
     }
 
     return data;
+};
+
+Ne2k.prototype.data_port_read8 = function()
+{
+    return this.data_port_read16() & 0xFF;
 };
 
 Ne2k.prototype.data_port_read16 = function()
