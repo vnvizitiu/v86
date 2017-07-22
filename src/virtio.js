@@ -15,7 +15,7 @@ function VirtIO(cpu, bus, filesystem)
         0xf4, 0x1a, 0x09, 0x10, 0x07, 0x05, 0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x01, 0xa8, 0x00, 0x00, 0x00, 0x10, 0xbf, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf4, 0x1a, 0x09, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
     ];
     this.pci_id = 0x06 << 3;
     this.pci_bars = [
@@ -24,8 +24,6 @@ function VirtIO(cpu, bus, filesystem)
         },
     ];
     this.name = "virtio";
-
-    cpu.devices.pci.register_device(this);
 
     var io = cpu.io;
 
@@ -123,6 +121,7 @@ function VirtIO(cpu, bus, filesystem)
         // reading resets the isr
         var isr = this.isr;
         this.isr = 0;
+        this.pci.lower_irq(this.pci_id);
         return isr;
     });
 
@@ -156,10 +155,11 @@ function VirtIO(cpu, bus, filesystem)
         }
     });
 
-    this.irq = 0xC;
-
     /** @const @type {CPU} */
     this.cpu = cpu;
+
+    /** @const @type {PCI} */
+    this.pci = cpu.devices.pci;
 
     /** @const @type {BusConnector} */
     this.bus = bus;
@@ -198,13 +198,15 @@ function VirtIO(cpu, bus, filesystem)
     // should be generalized to support more devices than just the filesystem
     this.device = new Virtio9p(filesystem, bus);
     this.device.SendReply = this.device_reply.bind(this);
+
+    cpu.devices.pci.register_device(this);
 }
 
 VirtIO.prototype.get_state = function()
 {
     var state = [];
 
-    state[0] = this.irq;
+    state[0] = 0; // unused
     state[1] = this.queue_select;
     state[2] = this.device_status;
     state[3] = this.isr;
@@ -218,7 +220,6 @@ VirtIO.prototype.get_state = function()
 
 VirtIO.prototype.set_state = function(state)
 {
-    this.irq = state[0];
     this.queue_select = state[1];
     this.device_status = state[2];
     this.isr = state[3];
@@ -413,7 +414,5 @@ VirtIO.prototype.device_reply = function(queueidx, infos)
     this.cpu.write32(used_desc_offset + 4, result_length);
 
     this.isr |= 1;
-    this.cpu.device_raise_irq(this.irq);
+    this.pci.raise_irq(this.pci_id);
 };
-
-

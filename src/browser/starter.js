@@ -140,6 +140,10 @@ function V86Starter(options)
     {
         this.screen_adapter = new ScreenAdapter(options["screen_container"], adapter_bus);
     }
+    else if(options["screen_dummy"])
+    {
+        this.screen_adapter = new DummyScreenAdapter(adapter_bus);
+    }
 
     if(options["serial_container"])
     {
@@ -165,6 +169,10 @@ function V86Starter(options)
                 break;
             case "fdb":
                 settings.fdb = this.disk_images["fdb"] = buffer;
+                break;
+
+            case "multiboot":
+                settings.multiboot = this.disk_images["multiboot"] = buffer;
                 break;
 
             case "bios":
@@ -211,7 +219,8 @@ function V86Starter(options)
             size: file["size"],
         };
 
-        if(name === "bios" || name === "vga_bios" || name === "initial_state")
+        if(name === "bios" || name === "vga_bios" ||
+            name === "initial_state" || name === "multiboot")
         {
             // Ignore async for these because they must be availabe before boot.
             // This should make result.buffer available after the object is loaded
@@ -237,19 +246,19 @@ function V86Starter(options)
             // - loads slices of the file asynchronously as requested
             // - slower get/set
 
-            // Heuristics: If file is smaller than 256M, use SyncFileBuffer
+            // Heuristics: If file is larger than or equal to 256M, use AsyncFileBuffer
             if(file.async === undefined)
             {
-                file.async = file.buffer.size < 256 * 1024 * 1024;
+                file.async = file.buffer.size >= 256 * 1024 * 1024;
             }
 
             if(file.async)
             {
-                var buffer = new v86util.SyncFileBuffer(file.buffer);
+                var buffer = new v86util.AsyncFileBuffer(file.buffer);
             }
             else
             {
-                var buffer = new v86util.AsyncFileBuffer(file.buffer);
+                var buffer = new v86util.SyncFileBuffer(file.buffer);
             }
 
             files_to_load.push({
@@ -285,7 +294,7 @@ function V86Starter(options)
     var image_names = [
         "bios", "vga_bios",
         "cdrom", "hda", "hdb", "fda", "fdb",
-        "initial_state",
+        "initial_state", "multiboot",
     ];
 
     for(var i = 0; i < image_names.length; i++)
@@ -411,7 +420,7 @@ function V86Starter(options)
                 {
                     this.bus.send("cpu-run");
                 }
-            }.bind(this), 0)
+            }.bind(this), 0);
         }.bind(this), 0);
     }
 }
@@ -836,7 +845,7 @@ V86Starter.prototype.create_file = function(file, data, callback)
 
     var path_infos = fs.SearchPath(file);
     var parent_id = path_infos.parentid;
-    var not_found = filename === "" || parent_id === -1
+    var not_found = filename === "" || parent_id === -1;
 
     if(!not_found)
     {

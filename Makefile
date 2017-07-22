@@ -1,6 +1,7 @@
 CLOSURE_DIR=closure-compiler
 CLOSURE=$(CLOSURE_DIR)/compiler.jar
 BROWSER=chromium
+NASM_TEST_DIR=./tests/nasm
 
 all: build/v86_all.js
 browser: build/v86_all.js
@@ -21,10 +22,12 @@ CLOSURE_SOURCE_MAP=\
 		# Easily breaks code:
 		#--assume_function_wrapper\
 
+		# implies new type inferrence
+		#--jscomp_error newCheckTypes\
+
 CLOSURE_FLAGS=\
 	        --js lib/closure-base.js\
 		--generate_exports\
-		--compilation_level ADVANCED_OPTIMIZATIONS\
 		--externs src/externs.js\
 		--warning_level VERBOSE\
 		--jscomp_error accessControls\
@@ -52,7 +55,6 @@ CLOSURE_FLAGS=\
 		--jscomp_error missingProperties\
 		--jscomp_error missingReturn\
 		--jscomp_error msgDescriptions\
-		--jscomp_error newCheckTypes\
 		--jscomp_error nonStandardJsDocs\
 		--jscomp_error suspiciousCode\
 		--jscomp_error strictModuleDepCheck\
@@ -66,20 +68,24 @@ CLOSURE_FLAGS=\
 		--summary_detail_level 3\
 		--language_in ECMASCRIPT5_STRICT
 
-
 TRANSPILE_ES6_FLAGS=\
 		--language_in ECMASCRIPT6_STRICT\
 		--language_out ECMASCRIPT5_STRICT\
 
 
-CORE_FILES=src/const.js src/io.js src/main.js src/lib.js src/fpu.js src/ide.js src/pci.js src/floppy.js src/memory.js\
-	   src/dma.js src/pit.js src/vga.js src/ps2.js src/pic.js src/rtc.js src/uart.js src/hpet.js src/acpi.js src/apic.js\
-	   src/state.js src/ne2k.js src/virtio.js src/bus.js src/log.js\
-	   src/cpu.js src/translate.js src/modrm.js src/string.js src/arith.js src/misc_instr.js src/instructions.js src/debug.js
-LIB_FILES=lib/9p.js lib/filesystem.js lib/jor1k.js lib/marshall.js lib/utf8.js
-BROWSER_FILES=src/browser/screen.js\
-	      src/browser/keyboard.js src/browser/mouse.js src/browser/serial.js\
-	      src/browser/network.js src/browser/lib.js src/browser/starter.js src/browser/worker_bus.js
+CORE_FILES=const.js config.js io.js main.js lib.js fpu.js ide.js pci.js floppy.js memory.js \
+	   dma.js pit.js vga.js ps2.js pic.js rtc.js uart.js hpet.js acpi.js apic.js ioapic.js \
+	   state.js ne2k.js virtio.js bus.js log.js \
+	   cpu.js translate.js modrm.js string.js arith.js misc_instr.js instructions.js debug.js \
+	   elf.js
+LIB_FILES=9p.js filesystem.js jor1k.js marshall.js utf8.js
+BROWSER_FILES=screen.js \
+	      keyboard.js mouse.js serial.js \
+	      network.js lib.js starter.js worker_bus.js dummy_screen.js
+
+CORE_FILES:=$(addprefix src/,$(CORE_FILES))
+LIB_FILES:=$(addprefix lib/,$(LIB_FILES))
+BROWSER_FILES:=$(addprefix src/browser/,$(BROWSER_FILES))
 
 build/v86_all.js: $(CLOSURE) src/*.js src/browser/*.js lib/*.js
 	mkdir -p build
@@ -89,6 +95,7 @@ build/v86_all.js: $(CLOSURE) src/*.js src/browser/*.js lib/*.js
 		--define=DEBUG=false\
 		$(CLOSURE_SOURCE_MAP)\
 		$(CLOSURE_FLAGS)\
+		--compilation_level ADVANCED\
 		$(TRANSPILE_ES6_FLAGS)\
 		--js $(CORE_FILES)\
 		--js $(LIB_FILES)\
@@ -107,6 +114,7 @@ build/libv86.js: $(CLOSURE) src/*.js lib/*.js src/browser/*.js
 		--js_output_file build/libv86.js\
 		--define=DEBUG=false\
 		$(CLOSURE_FLAGS)\
+		--compilation_level SIMPLE\
 		$(TRANSPILE_ES6_FLAGS)\
 		--output_wrapper ';(function(){%output%})();'\
 		--js $(CORE_FILES)\
@@ -118,6 +126,9 @@ build/libv86.js: $(CLOSURE) src/*.js lib/*.js src/browser/*.js
 clean:
 	-rm build/libv86.js
 	-rm build/v86_all.js
+	-rm build/libv86.js.map
+	-rm build/v86_all.js.map
+	$(MAKE) -C $(NASM_TEST_DIR) clean
 
 run:
 	python2 -m SimpleHTTPServer 2> /dev/null
@@ -142,3 +153,18 @@ $(CLOSURE):
 
 tests: build/libv86.js
 	./tests/full/run.js
+
+nasmtests: build/libv86.js
+	$(MAKE) -C $(NASM_TEST_DIR) all
+	$(NASM_TEST_DIR)/run.js
+
+qemutests: build/libv86.js
+	make -C tests/qemu test-i386
+	./tests/qemu/run.js > result
+	./tests/qemu/test-i386 > reference
+	diff result reference
+
+kvm-unit-test: build/libv86.js
+	(cd tests/kvm-unit-tests && ./configure)
+	make -C tests/kvm-unit-tests
+	tests/kvm-unit-tests/run.js tests/kvm-unit-tests/x86/realmode.flat

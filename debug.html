@@ -10,6 +10,10 @@
 <div>
     <div id="boot_options">
         <h4>Debugger</h4>
+        <input type="button" value="ReactOS" id="start_reactos">
+        <input type="button" value="Windows ME" id="start_windowsme">
+        <input type="button" value="Windows 95" id="start_windows95">
+        <input type="button" value="FreeBSD" id="start_freebsd">
         <input type="button" value="Windows 98" id="start_windows98">
         <input type="button" value="Arch Linux" id="start_archlinux">
         <input type="button" value="Oberon" id="start_oberon">
@@ -18,6 +22,7 @@
         <input type="button" value="Linux 3.18" id="start_linux3">
         <input type="button" value="Windows 1.01" id="start_windows1">
         <input type="button" value="FreeDOS" id="start_freedos">
+        <input type="button" value="MS-DOS" id="start_msdos">
         <input type="button" value="OpenBSD" id="start_openbsd">
         <input type="button" value="Solar OS" id="start_solos">
         <input type="button" value="Bootchess" id="start_bootchess">
@@ -54,6 +59,11 @@
             <tr>
                 <td>Hard drive disk image</td>
                 <td><input type="file" id="hd_image"><br></td>
+            </tr>
+
+            <tr>
+                <td>Multiboot kernel image</td>
+                <td><input type="file" id="multiboot_image"><br></td>
             </tr>
 
             <tr>
@@ -172,7 +182,7 @@
     <br>
 </div>
 
-<div id="screen_container">
+<div id="screen_container" style="display: none">
     <div id="screen"></div>
     <canvas id="vga"></canvas>
 </div>
@@ -228,13 +238,12 @@
     </label>
 </div>
 
+<div id="debug_panel" style="display: none">
+</div>
+
 <br style="clear:both"><br>
 
 <textarea readonly id="log" style="display:none"></textarea>
 
 <textarea spellcheck="false" cols="40" rows="12" id="serial" style="display:none">
 </textarea>
-
-<hr>
-<a href="./">To fast version</a>
-

@@ -9,3 +9,8 @@ closure-compiler/
 images/
 *.bak
 *.orig
+*.o
+*.bin
+*.img
+*.fixture
+*.fuse_hidden*

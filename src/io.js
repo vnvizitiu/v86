@@ -12,26 +12,12 @@ function IO(cpu)
     /** @const */
     this.ports = [];
 
-    /* const */
-    this.devices = Array(0x10000);
-
     /** @const @type {CPU} */
     this.cpu = cpu;
 
-
     for(var i = 0; i < 0x10000; i++)
     {
-        this.ports[i] = {
-            read8: this.empty_port_read8,
-            read16: this.empty_port_read16,
-            read32: this.empty_port_read32,
-
-            write8: this.empty_port_write,
-            write16: this.empty_port_write,
-            write32: this.empty_port_write,
-
-            device: undefined,
-        };
+        this.ports[i] = this.create_empty_entry();
     }
 
     var memory_size = cpu.memory_size;
@@ -63,25 +49,39 @@ function IO(cpu)
     );
 }
 
+IO.prototype.create_empty_entry = function()
+{
+    return {
+        read8: this.empty_port_read8,
+        read16: this.empty_port_read16,
+        read32: this.empty_port_read32,
+
+        write8: this.empty_port_write,
+        write16: this.empty_port_write,
+        write32: this.empty_port_write,
+
+        device: undefined,
+    };
+};
 
 IO.prototype.empty_port_read8 = function()
 {
     return 0xFF;
-}
+};
 
 IO.prototype.empty_port_read16 = function()
 {
     return 0xFFFF;
-}
+};
 
 IO.prototype.empty_port_read32 = function()
 {
     return -1;
-}
+};
 
 IO.prototype.empty_port_write = function(x)
 {
-}
+};
 
 
 /**
@@ -364,7 +364,7 @@ IO.prototype.port_write32 = function(port_addr, data)
     if(entry.write32 === this.empty_port_write || LOG_ALL_IO)
     {
         dbg_log(
-            "write32 port #" + h(port_addr, 4) + " <- " + h(data, 8) + this.get_port_description(port_addr),
+            "write32 port #" + h(port_addr, 4) + " <- " + h(data >>> 0, 8) + this.get_port_description(port_addr),
             LOG_IO
         );
     }
@@ -399,7 +399,7 @@ IO.prototype.port_read16 = function(port_addr)
         );
     }
     var value = entry.read16.call(entry.device);
-    dbg_assert(value < 0x10000, "16 bit port returned large value: " + h(port_addr));
+    dbg_assert(value < 0x10000 && value >= 0, "16 bit port returned large value: " + h(port_addr));
     return value;
 };
 
@@ -414,7 +414,9 @@ IO.prototype.port_read32 = function(port_addr)
             LOG_IO
         );
     }
-    return entry.read32.call(entry.device);
+    var value = entry.read32.call(entry.device);
+    dbg_assert((value | 0) === value);
+    return value;
 };
 
 // via seabios ioport.h
@@ -484,6 +486,6 @@ IO.prototype.get_port_description = function(addr)
     {
         return "";
     }
-}
+};
 
 

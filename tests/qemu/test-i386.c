@@ -30,12 +30,14 @@
 #include <sys/mman.h>
 
 #if !defined(__x86_64__)
-#define TEST_VM86
+//#define TEST_VM86
 #define TEST_SEGS
 #endif
 //#define LINUX_VM86_IOPL_FIX
 //#define TEST_P4_FLAGS
-#ifdef __SSE__
+
+//#ifdef __SSE__
+#if 1
 #define TEST_SSE
 #define TEST_CMOV  1
 #define TEST_FCOMI 1
@@ -874,8 +876,11 @@ union float64u s_nan = { .l = 0xFFF0000000000000LL };
 
 void test_fops(double a, double b)
 {
-    int ib = (int)b;
-    int dest = 0;
+    //int ib = (int)b;
+    //int dest = 0;
+
+    // XXX: Tests below are disabled since libc (which is statically linked)
+    //      contains sse instructions, some of which aren't supported.
 
     printf("a=%f b=%f a+b=%f\n", a, b, a + b);
     printf("a=%f b=%f a-b=%f\n", a, b, a - b);
@@ -883,34 +888,34 @@ void test_fops(double a, double b)
     printf("a=%f b=%f a/b=%f\n", a, b, a / b);
     printf("a=%f b=%f =%f\n", a, b, a + a + a + 3 * b / a * (a * a * a / b / b / (a + 1.0) - 3.5 + a * b / (3.7 * a / (a - b * b) + 6.5 * a / (b * b * a / -b - a * b) + 5.5 * (b - a))));
     printf("a=%f b=%f fmod(a, b)=%f\n", a, b, fmod(a, b));
-    printf("a=%f fma(a,b,a)=%f\n", a, fma(a, b, a));
-    printf("a=%f fdim(a,b)=%f\n", a, fdim(a, b));
+    //printf("a=%f fma(a,b,a)=%f\n", a, fma(a, b, a));
+    //printf("a=%f fdim(a,b)=%f\n", a, fdim(a, b));
     printf("a=%f copysign(a,b)=%f\n", a, copysign(a, b));
     printf("a=%f sqrt(a)=%f\n", a, sqrt(a));
-    printf("a=%f sin(a)=%f\n", a, sin(a));
-    printf("a=%f cos(a)=%f\n", a, cos(a));
-    printf("a=%f tan(a)=%f\n", a, tan(a));
-    printf("a=%f log(a)=%f\n", a, log(a));
-    printf("a=%f log10(a)=%f\n", a, log10(a));
-    printf("a=%f log1p(a)=%f\n", a, log1p(a));
-    printf("a=%f log2(a)=%f\n", a, log2(a));
-    printf("a=%f logb(a)=%f\n", a, logb(a));
-    printf("a=%f ilogb(a)=%d\n", a, ilogb(a));
+    //printf("a=%f sin(a)=%f\n", a, sin(a));
+    //printf("a=%f cos(a)=%f\n", a, cos(a));
+    //printf("a=%f tan(a)=%f\n", a, tan(a));
+    //printf("a=%f log(a)=%f\n", a, log(a));
+    //printf("a=%f log10(a)=%f\n", a, log10(a));
+    //printf("a=%f log1p(a)=%f\n", a, log1p(a));
+    //printf("a=%f log2(a)=%f\n", a, log2(a));
+    //printf("a=%f logb(a)=%f\n", a, logb(a));
+    //printf("a=%f ilogb(a)=%d\n", a, ilogb(a));
     printf("a=%f exp(a)=%f\n", a, exp(a));
-    printf("a=%f exp2(a)=%f\n", a, exp2(a));
-    printf("a=%f frexp(a)=%f, %d\n", a, frexp(a, &dest), dest);
-    printf("a=%f ldexp(a,b)=%f\n", a, ldexp(a, ib));
-    printf("a=%f scalbn(a,b)=%f\n", a, scalbn(a, ib));
-    printf("a=%f sihh(a)=%f\n", a, sinh(a));
-    printf("a=%f cosh(a)=%f\n", a, cosh(a));
-    printf("a=%f tanh(a)=%f\n", a, tanh(a));
-    printf("a=%f fabs(a)=%f\n", a, fabs(a));
-    printf("a=%f pow(a,b)=%f\n", a, pow(a,b));
-    printf("a=%f b=%f atan2(a, b)=%f\n", a, b, atan2(a, b));
-    /* just to test some op combining */
-    printf("a=%f asin(sin(a))=%f\n", a, asin(sin(a)));
-    printf("a=%f acos(cos(a))=%f\n", a, acos(cos(a)));
-    printf("a=%f atan(tan(a))=%f\n", a, atan(tan(a)));
+    //printf("a=%f exp2(a)=%f\n", a, exp2(a));
+    //printf("a=%f frexp(a)=%f, %d\n", a, frexp(a, &dest), dest);
+    //printf("a=%f ldexp(a,b)=%f\n", a, ldexp(a, ib));
+    //printf("a=%f scalbn(a,b)=%f\n", a, scalbn(a, ib));
+    //printf("a=%f sihh(a)=%f\n", a, sinh(a));
+    //printf("a=%f cosh(a)=%f\n", a, cosh(a));
+    //printf("a=%f tanh(a)=%f\n", a, tanh(a));
+    //printf("a=%f fabs(a)=%f\n", a, fabs(a));
+    //printf("a=%f pow(a,b)=%f\n", a, pow(a,b));
+    //printf("a=%f b=%f atan2(a, b)=%f\n", a, b, atan2(a, b));
+    ///* just to test some op combining */
+    //printf("a=%f asin(sin(a))=%f\n", a, asin(sin(a)));
+    //printf("a=%f acos(cos(a))=%f\n", a, acos(cos(a)));
+    //printf("a=%f atan(tan(a))=%f\n", a, atan(tan(a)));
 
 }
 
@@ -2277,7 +2282,8 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
     { 0x0f76255a085427f8, 0xc233e9e8c4c9439a },
 };
 
-#define SSE_OP(op)\
+#define SSE_OP(op) {}
+/*                                              \
 {\
     asm volatile (#op " %2, %0" : "=x" (r.dq) : "0" (a.dq), "x" (b.dq));\
     printf("%-9s: a=" FMT64X "" FMT64X " b=" FMT64X "" FMT64X " r=" FMT64X "" FMT64X "\n",\
@@ -2286,8 +2292,10 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
            b.q[1], b.q[0],\
            r.q[1], r.q[0]);\
 }
+*/
 
-#define SSE_OP2(op)\
+#define SSE_OP2(op) {}
+/*                                              \
 {\
     int i;\
     for(i=0;i<2;i++) {\
@@ -2298,6 +2306,7 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
     SSE_OP(op);\
     }\
 }
+*/
 
 #define MMX_OP2(op)\
 {\
@@ -2315,6 +2324,24 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
     SSE_OP2(op);\
 }
 
+
+#define SHUF_OP(op, ib)\
+{\
+    int i;\
+    for(i=0;i<2;i++) {\
+    a.q[0] = test_values[2*i][0];\
+    b.q[0] = test_values[2*i+1][0];\
+    asm volatile (#op " $" #ib ", %2, %0" : "=y" (r.q[0]) : "0" (a.q[0]), "y" (b.q[0])); \
+    printf("%-9s: a=" FMT64X " b=" FMT64X " ib=%02x r=" FMT64X "\n",\
+           #op,\
+           a.q[0],\
+           b.q[0],\
+           ib,\
+           r.q[0]);\
+    }\
+}
+
+/*
 #define SHUF_OP(op, ib)\
 {\
     a.q[0] = test_values[0][0];\
@@ -2329,6 +2356,7 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
            ib,\
            r.q[1], r.q[0]);\
 }
+*/
 
 #define PSHUF_OP(op, ib)\
 {\
@@ -2345,6 +2373,22 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
     }\
 }
 
+// To use mm0-7 registers instead of xmm registers
+#define SHIFT_IM(op, ib)                        \
+{\
+    int i;\
+    for(i=0;i<2;i++) {\
+    a.q[0] = test_values[2*i][0];\
+    asm volatile (#op " $" #ib ", %0" : "=y" (r.q[0]) : "0" (a.q[0]));\
+    printf("%-9s: a=" FMT64X " ib=%02x r=" FMT64X "\n",\
+           #op,\
+           a.q[0],\
+           ib,\
+           r.q[0]);\
+    }\
+}
+
+/*
 #define SHIFT_IM(op, ib)\
 {\
     int i;\
@@ -2359,7 +2403,27 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
            r.q[1], r.q[0]);\
     }\
 }
+*/
 
+// To use mm0-7 registers instead of xmm registers
+#define SHIFT_OP(op, ib)\
+{\
+    int i;\
+    SHIFT_IM(op, ib);\
+    for(i=0;i<2;i++) {\
+    a.q[0] = test_values[2*i][0];\
+    b.q[0] = ib;\
+    asm volatile (#op " %2, %0" : "=y" (r.q[0]) : "0" (a.q[0]), "y" (b.q[0]));\
+    printf("%-9s: a=" FMT64X " b=" FMT64X " ib=%02x r=" FMT64X "\n",\
+           #op,\
+           a.q[0],\
+           b.q[0],\
+           ib,\
+           r.q[0]);\
+    }\
+}
+
+/*
 #define SHIFT_OP(op, ib)\
 {\
     int i;\
@@ -2377,6 +2441,7 @@ static uint64_t __attribute__((aligned(16))) test_values[4][2] = {
            r.q[1], r.q[0]);\
     }\
 }
+*/
 
 #define MOVMSK(op)\
 {\
@@ -2418,10 +2483,12 @@ SSE_OP(a ## sd);
 
 void test_sse_comi(double a1, double b1)
 {
+    /*
     SSE_COMI(ucomiss, s);
     SSE_COMI(ucomisd, d);
     SSE_COMI(comiss, s);
     SSE_COMI(comisd, d);
+    */
 }
 
 #define CVT_OP_XMM(op)\
@@ -2512,8 +2579,8 @@ void test_fxsave(void)
         "movdqa %2, %%xmm15\n"
 #endif
         " fld1\n"
-        " fldpi\n"
-        " fldln2\n"
+        " fld1\n"
+        " fldz\n"
         " fxsave %0\n"
         " fxrstor %0\n"
         " fxsave %1\n"
@@ -2564,39 +2631,41 @@ void test_sse(void)
     MMX_OP2(pcmpeqw);
     MMX_OP2(pcmpeqd);
 
-    MMX_OP2(paddq);
+    // MMX_OP2(paddq);
     MMX_OP2(pmullw);
     MMX_OP2(psubusb);
     MMX_OP2(psubusw);
-    MMX_OP2(pminub);
+    // MMX_OP2(pminub);
     MMX_OP2(pand);
     MMX_OP2(paddusb);
     MMX_OP2(paddusw);
-    MMX_OP2(pmaxub);
+    // MMX_OP2(pmaxub);
     MMX_OP2(pandn);
 
-    MMX_OP2(pmulhuw);
+    // MMX_OP2(pmulhuw);
     MMX_OP2(pmulhw);
 
     MMX_OP2(psubsb);
     MMX_OP2(psubsw);
-    MMX_OP2(pminsw);
+    // MMX_OP2(pminsw);
     MMX_OP2(por);
     MMX_OP2(paddsb);
     MMX_OP2(paddsw);
-    MMX_OP2(pmaxsw);
+    // MMX_OP2(pmaxsw);
     MMX_OP2(pxor);
-    MMX_OP2(pmuludq);
+    // MMX_OP2(pmuludq);
     MMX_OP2(pmaddwd);
-    MMX_OP2(psadbw);
+    // MMX_OP2(psadbw);
     MMX_OP2(psubb);
     MMX_OP2(psubw);
     MMX_OP2(psubd);
-    MMX_OP2(psubq);
+    // MMX_OP2(psubq);
     MMX_OP2(paddb);
     MMX_OP2(paddw);
+    MMX_OP2(psrlw);
     MMX_OP2(paddd);
 
+    /*
     MMX_OP2(pavgb);
     MMX_OP2(pavgw);
 
@@ -2666,10 +2735,15 @@ void test_sse(void)
 
     SHUF_OP(shufps, 0x78);
     SHUF_OP(shufpd, 0x02);
+    */
+    SHUF_OP(pshufw, 0x78);
+    SHUF_OP(pshufw, 0x02);
+    /*
 
     PSHUF_OP(pshufd, 0x78);
     PSHUF_OP(pshuflw, 0x78);
     PSHUF_OP(pshufhw, 0x78);
+    */
 
     SHIFT_OP(psrlw, 7);
     SHIFT_OP(psrlw, 16);
@@ -2690,6 +2764,7 @@ void test_sse(void)
     SHIFT_OP(psllq, 7);
     SHIFT_OP(psllq, 32);
 
+    /*
     SHIFT_IM(psrldq, 16);
     SHIFT_IM(psrldq, 7);
     SHIFT_IM(pslldq, 16);
@@ -2697,9 +2772,10 @@ void test_sse(void)
 
     MOVMSK(movmskps);
     MOVMSK(movmskpd);
+    */
 
     /* FPU specific ops */
-
+    /*
     {
         uint32_t mxcsr;
         asm volatile("stmxcsr %0" : "=m" (mxcsr));
@@ -2768,8 +2844,10 @@ void test_sse(void)
         SSE_OPD(cmpnle);
         SSE_OPD(cmpord);
     }
+    */
 
     /* float to float/int */
+    /*
     a.s[0] = 2.7;
     a.s[1] = 3.4;
     a.s[2] = 4;
@@ -2793,12 +2871,16 @@ void test_sse(void)
     CVT_OP_XMM2REG(cvttsd2si);
     CVT_OP_XMM(cvtpd2dq);
     CVT_OP_XMM(cvttpd2dq);
+    */
 
     /* sse/mmx moves */
+    /*
     CVT_OP_XMM2MMX(movdq2q);
     CVT_OP_MMX2XMM(movq2dq);
+    */
 
     /* int to float */
+    /*
     a.l[0] = -6;
     a.l[1] = 2;
     a.l[2] = 100;
@@ -2809,10 +2891,10 @@ void test_sse(void)
     CVT_OP_REG2XMM(cvtsi2sd);
     CVT_OP_XMM(cvtdq2ps);
     CVT_OP_XMM(cvtdq2pd);
-
+    */
     /* XXX: test PNI insns */
 #if 0
-    SSE_OP2(movshdup);
+    // SSE_OP2(movshdup);
 #endif
     asm volatile ("emms");
 }
@@ -2901,7 +2983,7 @@ int main(int argc, char **argv)
     test_code16();
 #endif
 #ifdef TEST_VM86
-    //test_vm86();
+    test_vm86();
 #endif
 #if !defined(__x86_64__)
     test_self_modifying_code();

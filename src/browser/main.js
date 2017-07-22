@@ -3,10 +3,16 @@
 (function()
 {
     /** @const */
-    var ON_LOCALHOST = location.host.indexOf(".") === -1;
+    var ON_LOCALHOST = !location.hostname.endsWith("copy.sh");
 
     /** @const */
     var HOST = ON_LOCALHOST ? "" : "//i.copy.sh/";
+
+    /** @const */
+    var OTHER_HOST = ON_LOCALHOST ? "" : "//j.copy.sh:8880/";
+
+    /** @const */
+    var ON_HTTPS = location.protocol === "https:";
 
     function dump_file(ab, name)
     {
@@ -29,13 +35,16 @@
         if(document.createEvent)
         {
             var ev = document.createEvent("MouseEvent");
-            ev.initMouseEvent("click", true, true, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);
+            ev.initMouseEvent("click", true, true, window,
+                              0, 0, 0, 0, 0, false, false, false, false, 0, null);
             a.dispatchEvent(ev);
         }
         else
         {
             a.click();
         }
+
+        window.URL.revokeObjectURL(a.href);
     }
 
     /**
@@ -60,7 +69,7 @@
         document.title = text + " - Virtual x86" +  (DEBUG ? " - debug" : "");
     }
 
-    function time2str(time)
+    function format_timestamp(time)
     {
         if(time < 60)
         {
@@ -146,7 +155,8 @@
     {
         if(!("responseType" in new XMLHttpRequest))
         {
-            alert("Your browser is not supported because it doesn't have XMLHttpRequest.responseType");
+            alert("Your browser is not supported " +
+                  "because it doesn't have XMLHttpRequest.responseType");
             return;
         }
 
@@ -181,6 +191,16 @@
                 settings.hda = { buffer: hd_file };
             }
 
+            if($("multiboot_image"))
+            {
+                var multiboot_file = $("multiboot_image").files[0];
+                if(multiboot_file)
+                {
+                    last_file = multiboot_file;
+                    settings.multiboot = { buffer: multiboot_file };
+                }
+            }
+
             if(last_file)
             {
                 set_title(last_file.name);
@@ -199,7 +219,7 @@
                 id: "archlinux",
                 state: {
                     "url": HOST + "images/v86state.bin",
-                    "size": 142924774,
+                    "size": 142770436,
                 },
                 name: "Arch Linux",
                 memory_size: 128 * 1024 * 1024,
@@ -215,10 +235,19 @@
                 filesystem: {
                     "basefs": {
                         "url": HOST + "images/fs.json",
-                        "size": 7510249
+                        "size": 10232633,
                     },
                     "baseurl": HOST + "arch/",
                 },
+            },
+            {
+                id: "msdos",
+                hda: {
+                    "url": HOST + "images/msdos.img",
+                    "size": 8 * 1024 * 1024,
+                },
+                boot_order: 0x132,
+                name: "MS-DOS",
             },
             {
                 id: "freedos",
@@ -260,7 +289,7 @@
                 id: "linux3",
                 cdrom: {
                     "url": HOST + "images/linux3.iso",
-                    "size": 10000384,
+                    "size": 8624128,
                 },
                 name: "Linux",
                 filesystem: {},
@@ -268,9 +297,9 @@
             {
                 id: "kolibrios",
                 fda: {
-                    "url": ON_LOCALHOST ?
+                    "url": (ON_LOCALHOST || ON_HTTPS) ?
                             "images/kolibri.img" :
-                            "http://builds.kolibrios.org/eng/data/data/kolibri.img",
+                            "//builds.kolibrios.org/eng/data/data/kolibri.img",
                     "size": 1474560,
                 },
                 name: "KolibriOS",
@@ -278,7 +307,7 @@
             {
                 id: "kolibrios-fallback",
                 fda: {
-                    "url": "images/kolibri.img",
+                    "url": HOST + "images/kolibri.img",
                     "size": 1474560,
                 },
                 name: "KolibriOS",
@@ -323,15 +352,91 @@
                     "size": 300 * 1024 * 1024,
                 },
                 name: "Windows 98",
-                boot_order: 0x132,
                 state: {
                     "url": HOST + "images/windows98_state.bin",
-                    "size": 75760000,
+                    "size": 75705744,
                 },
+            },
+            {
+                id: "windows95",
+                memory_size: 32 * 1024 * 1024,
+                hda: {
+                    "url": HOST + "images/W95.IMG",
+                    "size": 242049024,
+                    "async": true,
+                },
+                name: "Windows 95",
+                state: {
+                    "url": HOST + "images/windows95_state.bin",
+                    "size": 42151316,
+                },
+            },
+            {
+                id: "freebsd",
+                memory_size: 128 * 1024 * 1024,
+                state: {
+                    "url": HOST + "images/freebsd_state.bin",
+                    "size": 142815292,
+                },
+                hda: {
+                    "url": ON_LOCALHOST ? "../v86-images/os/freebsd3.img" :
+                                          OTHER_HOST + "images/freebsd3.img",
+                    "size": 17179869184,
+                    "async": true,
+                },
+                name: "FreeBSD",
+            },
+            {
+                id: "reactos",
+                memory_size: 256 * 1024 * 1024,
+                cdrom: {
+                    "url": HOST + "images/ReactOS-0.4.4-live.iso",
+                    "async": true,
+                },
+                state: {
+                    "url": HOST + "images/reactos_state.bin",
+                    "size": 276971224,
+                },
+                name: "ReactOS",
+                description: 'Running <a href="https://reactos.org/">ReactOS</a>',
             },
         ];
 
+        if(DEBUG)
+        {
+            // see tests/kvm-unit-tests/x86/
+            var tests = [
+                "realmode",
+                // All tests below require an APIC
+                "cmpxchg8b",
+                "port80",
+                "setjmp",
+                "sieve",
+                "hypercall", // crashes
+                "init", // stops execution
+                "msr", // TODO: Expects 64 bit msrs
+                "smap", // test stops, SMAP not enabled
+                "tsc_adjust", // TODO: IA32_TSC_ADJUST
+                "tsc", // TODO: rdtscp
+                "rmap_chain", // crashes
+                "memory", // missing mfence (uninteresting)
+                "taskswitch", // TODO: Jump
+                "taskswitch2", // TODO: Call TSS
+                "eventinj", // Missing #nt
+                "ioapic",
+                "apic",
+            ];
 
+            for(let test of tests)
+            {
+                oses.push({
+                    name: "Test case: " + test,
+                    id: "test-" + test,
+                    memory_size: 128 * 1024 * 1024,
+                    multiboot: { "url": "tests/kvm-unit-tests/x86/" + test + ".flat", }
+                });
+            }
+        }
 
         var query_args = get_query_arguments();
         var profile = query_args["profile"];
@@ -417,7 +522,8 @@
 
             settings.fda = infos.fda;
             settings.cdrom = infos.cdrom;
-            settings.hda = infos.hda
+            settings.hda = infos.hda;
+            settings.multiboot = infos.multiboot;
 
             settings.memory_size = infos.memory_size;
             settings.vga_memory_size = infos.vga_memory_size;
@@ -427,6 +533,12 @@
             if(infos.boot_order !== undefined)
             {
                 settings.boot_order = infos.boot_order;
+            }
+
+            if(!DEBUG && infos.description)
+            {
+                $("description").style.display = "block";
+                $("description").innerHTML = "<br>" + infos.description;
             }
 
             start_emulation(settings, done);
@@ -508,7 +620,8 @@
             {
                 LOG_LEVEL &= ~mask;
             }
-            this.blur();
+
+            target.blur();
         };
 
         var debug_infos = $("debug_infos");
@@ -565,6 +678,15 @@
             }
         }
 
+        if(!settings.fda)
+        {
+            var floppy_file = $("floppy_image").files[0];
+            if(floppy_file)
+            {
+                settings.fda = { buffer: floppy_file };
+            }
+        }
+
         /** @const */
         var BIOSPATH = "bios/";
 
@@ -577,7 +699,12 @@
         {
             var biosfile = DEBUG ? "seabios-debug.bin" : "seabios.bin";
             var vgabiosfile = DEBUG ? "vgabios-debug.bin" : "vgabios.bin";
+            //var biosfile = DEBUG ? "seabios-ultradebug.bin" : "seabios.bin";
+            //var vgabiosfile = DEBUG ? "vgabios-ultradebug.bin" : "vgabios.bin";
         }
+
+        //var biosfile = "seabios-qemu.bin";
+        //var vgabiosfile = "vgabios-qemu.bin";
 
         var bios;
         var vga_bios;
@@ -602,7 +729,7 @@
 
             "boot_order": settings.boot_order || parseInt($("boot_order").value, 16) || 0,
 
-            "network_relay_url": "ws://relay.widgetry.org/",
+            "network_relay_url": "wss://relay.widgetry.org/",
             //"network_relay_url": "ws://localhost:8001/",
 
             "bios": bios,
@@ -612,11 +739,15 @@
             "hda": settings.hda,
             "cdrom": settings.cdrom,
 
+            "multiboot": settings.multiboot,
+
             "initial_state": settings.initial_state,
             "filesystem": settings.filesystem || {},
 
             "autostart": true,
         });
+
+        if(DEBUG) window["emulator"] = emulator;
 
         emulator.add_listener("emulator-ready", function()
         {
@@ -642,7 +773,7 @@
             el.textContent = "Loading " + e.file_name + " failed. Check your connection " +
                              "and reload the page to try again.";
         });
-    };
+    }
 
     /**
      * @param {Object} settings
@@ -654,6 +785,8 @@
         $("loading").style.display = "none";
         $("runtime_options").style.display = "block";
         $("runtime_infos").style.display = "block";
+        $("screen_container").style.display = "block";
+
         document.getElementsByClassName("phone_keyboard")[0].style.display = "block";
 
         if(settings.filesystem)
@@ -727,7 +860,7 @@
 
             $("speed").textContent = last_ips / delta_time | 0;
             $("avg_speed").textContent = instruction_counter / running_time | 0;
-            $("running_time").textContent = time2str(running_time / 1000 | 0);
+            $("running_time").textContent = format_timestamp(running_time / 1000 | 0);
         }
 
         emulator.add_listener("emulator-started", function()
@@ -757,14 +890,14 @@
             stats_9p.read += args[1];
 
             $("info_filesystem_status").textContent = "Idle";
-            $("info_filesystem_last_file").textContent = args[0]
+            $("info_filesystem_last_file").textContent = args[0];
             $("info_filesystem_bytes_read").textContent = stats_9p.read;
         });
         emulator.add_listener("9p-write-end", function(args)
         {
             stats_9p.write += args[1];
 
-            $("info_filesystem_last_file").textContent = args[0]
+            $("info_filesystem_last_file").textContent = args[0];
             $("info_filesystem_bytes_written").textContent = stats_9p.write;
         });
 
@@ -893,7 +1026,7 @@
                 }
 
                 elem.blur();
-            }
+            };
         }
 
         $("memory_dump").onclick = function()
@@ -901,6 +1034,32 @@
             dump_file(emulator.v86.cpu.mem8, "v86memory.bin");
             $("memory_dump").blur();
         };
+
+        //$("memory_dump_dmp").onclick = function()
+        //{
+        //    var memory = emulator.v86.cpu.mem8;
+        //    var memory_size = memory.length;
+        //    var page_size = 4096;
+        //    var header = new Uint8Array(4096);
+        //    var header32 = new Int32Array(header.buffer);
+
+        //    header32[0] = 0x45474150; // 'PAGE'
+        //    header32[1] = 0x504D5544; // 'DUMP'
+
+        //    header32[0x10 >> 2] = emulator.v86.cpu.cr[3]; // DirectoryTableBase
+        //    header32[0x24 >> 2] = 1; // NumberProcessors
+        //    header32[0xf88 >> 2] = 1; // DumpType: full dump
+        //    header32[0xfa0 >> 2] = header.length + memory_size; // RequiredDumpSpace
+
+        //    header32[0x064 + 0 >> 2] = 1; // NumberOfRuns
+        //    header32[0x064 + 4 >> 2] = memory_size / page_size; // NumberOfPages
+        //    header32[0x064 + 8 >> 2] = 0; // BasePage
+        //    header32[0x064 + 12 >> 2] = memory_size / page_size; // PageCount
+
+        //    dump_file([header, memory], "v86memory.dmp");
+
+        //    $("memory_dump_dmp").blur();
+        //};
 
         $("save_state").onclick = function()
         {
@@ -949,11 +1108,11 @@
                 {
                     emulator.restore_state(e.target.result);
                 }
-                catch(e)
+                catch(err)
                 {
-                    alert("Something bad happened while restoring the state:\n" + e + "\n\n" +
+                    alert("Something bad happened while restoring the state:\n" + err + "\n\n" +
                           "Note that the current configuration must be the same as the original");
-                    throw e;
+                    throw err;
                 }
 
                 if(was_running)
@@ -1027,7 +1186,13 @@
                 // allow text selection
                 if(window.getSelection().isCollapsed)
                 {
-                    document.getElementsByClassName("phone_keyboard")[0].focus();
+                    let phone_keyboard = document.getElementsByClassName("phone_keyboard")[0];
+
+                    // stop mobile browser from scrolling into view when the keyboard is shown
+                    phone_keyboard.style.top = document.body.scrollTop + 100 + "px";
+                    phone_keyboard.style.left = document.body.scrollLeft + 100 + "px";
+
+                    phone_keyboard.focus();
                 }
             }
         };
@@ -1053,7 +1218,7 @@
                 {
                     window.onbeforeunload = null;
                     return "CTRL-W cannot be sent to the emulator.";
-                }
+                };
             }
             else
             {
@@ -1125,11 +1290,11 @@
         var debug = emulator.v86.cpu.debug;
 
         var debug_infos = $("debug_infos");
-        debug_infos.textContent += " | logging ops: " + (debug.step_mode || debug.trace_all ? "yes" : "no");
+        debug_infos.textContent += " | logging ops: " +
+            (debug.step_mode || debug.trace_all ? "yes" : "no");
 
         $("step").onclick = debug.step.bind(debug);
         $("run_until").onclick = debug.run_until.bind(debug);
-        $("debugger").onclick = debug.debugger.bind(debug);
         $("dump_gdt").onclick = debug.dump_gdt_ldt.bind(debug);
         $("dump_idt").onclick = debug.dump_idt.bind(debug);
         $("dump_regs").onclick = debug.dump_regs.bind(debug);
@@ -1138,7 +1303,7 @@
 
         $("dump_log").onclick = function()
         {
-            dump_file(log_data.join("\n"), "v86.log");
+            dump_file(log_data, "v86.log");
         };
 
         $("dump_instructions_file").onclick = function()
@@ -1151,9 +1316,19 @@
             }
         };
 
+        var cpu = emulator.v86.cpu;
+
+        $("debug_panel").style.display = "block";
+        setInterval(function()
+        {
+            $("debug_panel").textContent =
+                cpu.debug.get_regs_short().join("\n") + "\n" + cpu.debug.get_state();
+        }, 1000);
+
         // helps debugging
         window.emulator = emulator;
-        window.cpu = emulator.v86.cpu;
+        window.cpu = cpu;
+        window.dump_file = dump_file;
     }
 
     function onpopstate(e)

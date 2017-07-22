@@ -1,5 +1,9 @@
 "use strict";
 
+/** @const */
+var CPU_LOG_VERBOSE = true;
+
+
 // Resources:
 // https://pdos.csail.mit.edu/6.828/2006/readings/i386/toc.htm
 // https://www-ssl.intel.com/content/www/us/en/processors/architectures-software-developer-manuals.html
@@ -7,7 +11,7 @@
 
 
 /** @constructor */
-function CPU()
+function CPU(bus)
 {
     /** @type {number} */
     this.memory_size = 0;
@@ -16,14 +20,16 @@ function CPU()
     //       that we support)
     this.a20_enabled = true;
 
+    this.mem_page_infos = undefined;
+
     this.mem8 = new Uint8Array(0);
     this.mem16 = new Uint16Array(this.mem8.buffer);
     this.mem32s = new Int32Array(this.mem8.buffer);
 
-    this.segment_is_null = [];
-    this.segment_offsets = [];
-    this.segment_limits = [];
-    //this.segment_infos = [];
+    this.segment_is_null = new Uint8Array(8);
+    this.segment_limits = new Uint32Array(8);
+    //this.segment_infos = new Uint32Array(8);
+    this.segment_offsets = new Int32Array(8);
 
     /**
      * Translation Lookaside Buffer
@@ -70,6 +76,8 @@ function CPU()
     /** @type {number} */
     this.gdtr_offset = 0;
 
+    this.tss_size_32 = false;
+
     /*
      * whether or not a page fault occured
      */
@@ -94,34 +102,18 @@ function CPU()
     /** @type {number} */
     this.page_size_extensions = 0;
 
-    // current operand/address/stack size
+    // current operand/address size
     /** @type {boolean} */
     this.is_32 = false;
-    /** @type {boolean} */
-    this.operand_size_32 = false;
-    /** @type {boolean} */
-    this.stack_size_32 = false;
 
     /** @type {boolean} */
-    this.address_size_32 = false;
+    this.stack_size_32 = false;
 
     /**
      * Was the last instruction a hlt?
      * @type {boolean}
      */
     this.in_hlt = false;
-
-    /** @type {!Object} */
-    this.devices = {
-        vga: {
-            timer: function(now) {},
-            destroy: function() {},
-        },
-        ps2: {
-            timer: function(now) {},
-            destroy: function() {},
-        },
-    };
 
     /** @type {number} */
     this.last_virt_eip = 0;
@@ -145,9 +137,8 @@ function CPU()
     /** @type {number} */
     this.sysenter_eip = 0;
 
-
     /** @type {number} */
-    this.repeat_string_prefix = REPEAT_STRING_PREFIX_NONE;
+    this.prefixes = 0;
 
     /** @type {number} */
     this.flags = 0;
@@ -189,12 +180,8 @@ function CPU()
     /** @type {number} */
     this.phys_addr_high = 0;
 
-
-    // cpu.reg16 or cpu.reg32s, depending on address size attribute
-    this.regv = this.reg16;
-    this.reg_vcx = 0;
-    this.reg_vsi = 0;
-    this.reg_vdi = 0;
+    /** @type {!Object} */
+    this.devices = {};
 
     this.table = [];
 
@@ -202,12 +189,42 @@ function CPU()
     /** @type {boolean} */
     this.paging = false;
 
-
     /** @type {number} */
     this.instruction_pointer = 0;
 
     /** @type {number} */
     this.previous_ip = 0;
+
+    this.apic_enabled = true;
+
+    /**
+     * @type {number}
+     */
+    this.timestamp_counter = 0;
+
+    // registers
+    this.reg32s = new Int32Array(8);
+    this.reg32 = new Uint32Array(this.reg32s.buffer);
+    this.reg16s = new Int16Array(this.reg32s.buffer);
+    this.reg16 = new Uint16Array(this.reg32s.buffer);
+    this.reg8s = new Int8Array(this.reg32s.buffer);
+    this.reg8 = new Uint8Array(this.reg32s.buffer);
+
+    // mm0-mm7 split up into 32 bit pairs
+    this.reg_mmxs = new Int32Array(16);
+    this.reg_mmx = new Uint32Array(this.reg_mmxs.buffer);
+    this.reg_mmx8s = new Int8Array(this.reg_mmxs.buffer);
+    this.reg_mmx8 = new Uint8Array(this.reg_mmxs.buffer);
+
+    this.reg_xmm32s = new Int32Array(8 * 4);
+    this.mxcsr = 0x1F80;
+
+    // segment registers, tr and ldtr
+    this.sreg = new Uint16Array(8);
+
+    // debug registers
+    this.dreg = new Int32Array(8);
+
 
     // managed in io.js
     /** @const */ this.memory_map_read8 = [];
@@ -224,43 +241,24 @@ function CPU()
         vga: null,
     };
 
-    /**
-     * @type {number}
-     */
-    this.timestamp_counter = 0;
-
-    // registers
-    this.reg32s = new Int32Array(8);
-    this.reg32 = new Uint32Array(this.reg32s.buffer);
-    this.reg16s = new Int16Array(this.reg32s.buffer);
-    this.reg16 = new Uint16Array(this.reg32s.buffer);
-    this.reg8s = new Int8Array(this.reg32s.buffer);
-    this.reg8 = new Uint8Array(this.reg32s.buffer);
-
-    // segment registers, tr and ldtr
-    this.sreg = new Uint16Array(8);
-
-    // debug registers
-    this.dreg = new Int32Array(8);
-
-    // current state of prefixes
-    this.segment_prefix = SEG_PREFIX_NONE;
-
-    // dynamic instruction translator
-    this.translator = undefined;
+    /** @type {number} */
+    this.fw_value = 0;
 
     this.io = undefined;
     this.fpu = undefined;
 
+    this.bus = bus;
+
     dbg_assert(this.table16 && this.table32);
     dbg_assert(this.table0F_16 && this.table0F_32);
 
-    this.update_address_size();
     this.update_operand_size();
 
     this.tsc_offset = v86.microtick();
 
     this.debug_init();
+
+    this.init2();
 
     //Object.seal(this);
 }
@@ -283,8 +281,7 @@ CPU.prototype.get_state = function()
     state[11] = this.cpl;
     state[12] = this.page_size_extensions;
     state[13] = this.is_32;
-    state[14] = this.operand_size_32;
-    state[15] = this.address_size_32;
+
     state[16] = this.stack_size_32;
     state[17] = this.in_hlt;
     state[18] = this.last_virt_eip;
@@ -294,7 +291,7 @@ CPU.prototype.get_state = function()
     state[22] = this.sysenter_cs;
     state[23] = this.sysenter_eip;
     state[24] = this.sysenter_esp;
-    state[25] = this.repeat_string_prefix;
+    state[25] = this.prefixes;
     state[26] = this.flags;
     state[27] = this.flags_changed;
     state[28] = this.last_op1;
@@ -313,11 +310,11 @@ CPU.prototype.get_state = function()
     state[43] = this.fpu;
 
     state[45] = this.devices.virtio;
-    //state[46] = this.devices.apic;
+    state[46] = this.devices.apic;
     state[47] = this.devices.rtc;
     state[48] = this.devices.pci;
     state[49] = this.devices.dma;
-    //state[50] = this.devices.acpi;
+    state[50] = this.devices.acpi;
     state[51] = this.devices.hpet;
     state[52] = this.devices.vga;
     state[53] = this.devices.ps2;
@@ -330,6 +327,13 @@ CPU.prototype.get_state = function()
     state[60] = this.devices.pic;
 
     state[61] = this.a20_enabled;
+    state[62] = this.fw_value;
+
+    state[63] = this.devices.ioapic;
+
+    state[64] = this.tss_size_32;
+
+    state[65] = this.reg_mmxs;
 
     return state;
 };
@@ -350,9 +354,9 @@ CPU.prototype.set_state = function(state)
     this.cpl = state[11];
     this.page_size_extensions = state[12];
     this.is_32 = state[13];
-    this.operand_size_32 = state[14];
-    this.address_size_32 = state[15];
+
     this.stack_size_32 = state[16];
+
     this.in_hlt = state[17];
     this.last_virt_eip = state[18];
     this.eip_phys = state[19];
@@ -361,7 +365,8 @@ CPU.prototype.set_state = function(state)
     this.sysenter_cs = state[22];
     this.sysenter_eip = state[23];
     this.sysenter_esp = state[24];
-    this.repeat_string_prefix = state[25];
+    this.prefixes = state[25];
+
     this.flags = state[26];
     this.flags_changed = state[27];
     this.last_op1 = state[28];
@@ -380,11 +385,11 @@ CPU.prototype.set_state = function(state)
     this.fpu = state[43];
 
     this.devices.virtio = state[45];
-    //this.devices.apic = state[46];
+    this.devices.apic = state[46];
     this.devices.rtc = state[47];
     this.devices.pci = state[48];
     this.devices.dma = state[49];
-    //this.devices.acpi = state[50];
+    this.devices.acpi = state[50];
     this.devices.hpet = state[51];
     this.devices.vga = state[52];
     this.devices.ps2 = state[53];
@@ -397,6 +402,13 @@ CPU.prototype.set_state = function(state)
     this.devices.pic = state[60];
 
     this.a20_enabled = state[61];
+    this.fw_value = state[62];
+
+    this.devices.ioapic = state[63];
+
+    this.tss_size_32 = state[64];
+
+    this.reg_mmxs = state[65];
 
     this.mem16 = new Uint16Array(this.mem8.buffer, this.mem8.byteOffset, this.mem8.length >> 1);
     this.mem32s = new Int32Array(this.mem8.buffer, this.mem8.byteOffset, this.mem8.length >> 2);
@@ -411,7 +423,9 @@ CPU.prototype.set_state = function(state)
     this.reg8s = new Int8Array(this.reg32s.buffer);
     this.reg8 = new Uint8Array(this.reg32s.buffer);
 
-    this.update_address_size();
+    this.reg_mmx = new Uint32Array(this.reg_mmxs.buffer);
+    this.reg_mmx8s = new Int8Array(this.reg_mmxs.buffer);
+    this.reg_mmx8 = new Uint8Array(this.reg_mmxs.buffer);
     this.update_operand_size();
 };
 
@@ -429,9 +443,9 @@ CPU.prototype.main_run = function()
         //    var t = 0;
         //}
         //else
-        {
+        //{
             var t = this.hlt_loop();
-        }
+        //}
 
         if(this.in_hlt)
         {
@@ -440,6 +454,7 @@ CPU.prototype.main_run = function()
     }
 
     this.do_run();
+
     return 0;
 };
 
@@ -464,7 +479,7 @@ CPU.prototype.exception_cleanup = function(e)
         //Error.captureStackTrace && Error.captureStackTrace(e);
         throw e;
     }
-}
+};
 
 CPU.prototype.reboot_internal = function()
 {
@@ -478,21 +493,35 @@ CPU.prototype.reset = function()
 {
     this.a20_enabled = true;
 
-    this.segment_is_null = new Uint8Array(8);
-    this.segment_limits = new Uint32Array(8);
-    //this.segment_infos = new Uint32Array(8);
-    this.segment_offsets = new Int32Array(8);
+    for(let i = 0; i < 8; i++)
+    {
+        this.segment_is_null[i] = 0;
+        this.segment_limits[i] = 0;
+        //this.segment_infos = new Uint32Array(8);
+        this.segment_offsets[i] = 0;
+    }
 
     this.full_clear_tlb();
 
-    this.reg32s = new Int32Array(8);
-    this.reg32 = new Uint32Array(this.reg32s.buffer);
-    this.reg16s = new Int16Array(this.reg32s.buffer);
-    this.reg16 = new Uint16Array(this.reg32s.buffer);
-    this.reg8s = new Int8Array(this.reg32s.buffer);
-    this.reg8 = new Uint8Array(this.reg32s.buffer);
-    this.sreg = new Uint16Array(8);
-    this.dreg = new Int32Array(8);
+    for(let i = 0; i < 8; i++)
+    {
+        this.reg32s[i] = 0;
+        this.sreg[i] = 0;
+        this.cr[i] = 0;
+        this.dreg[i] = 0;
+    }
+
+    for(let i = 0; i < this.reg_mmxs.length; i++)
+    {
+        this.reg_mmxs[i] = 0;
+    }
+
+    for(let i = 0; i < this.reg_xmm32s.length; i++)
+    {
+        this.reg_xmm32s[i] = 0;
+    }
+    this.mxcsr = 0x1F80;
+
     this.protected_mode = false;
 
     // http://www.sandpile.org/x86/initial.htm
@@ -513,14 +542,13 @@ CPU.prototype.reset = function()
     this.paging = false;
     this.page_size_extensions = 0;
     this.is_32 = false;
-    this.operand_size_32 = false;
     this.stack_size_32 = false;
-    this.address_size_32 = false;
+    this.prefixes = 0;
 
-    this.paging_changed();
+    this.last_virt_eip = -1;
+    this.last_virt_esp = -1;
 
     this.update_operand_size();
-    this.update_address_size();
 
     this.timestamp_counter = 0;
     this.previous_ip = 0;
@@ -530,8 +558,6 @@ CPU.prototype.reset = function()
     this.sysenter_esp = 0;
     this.sysenter_eip = 0;
 
-    this.segment_prefix = SEG_PREFIX_NONE;
-    this.repeat_string_prefix = REPEAT_STRING_PREFIX_NONE;
     this.flags = flags_default;
     this.flags_changed = 0;
 
@@ -553,6 +579,8 @@ CPU.prototype.reset = function()
     {
         this.devices.virtio.reset();
     }
+
+    this.fw_value = 0;
 };
 
 /** @export */
@@ -573,9 +601,6 @@ CPU.prototype.create_memory = function(size)
 
     this.memory_size = size;
 
-    // use by dynamic translator
-    //if(OP_TRANSLATION) this.mem_page_infos = new Uint8Array(1 << 20);
-
     var buffer = new ArrayBuffer(size);
 
     this.mem8 = new Uint8Array(buffer);
@@ -585,14 +610,10 @@ CPU.prototype.create_memory = function(size)
 
 CPU.prototype.init = function(settings, device_bus)
 {
-    this.create_memory(settings.memory_size || 1024 * 1024 * 64);
+    this.create_memory(typeof settings.memory_size === "number" ?
+        settings.memory_size : 1024 * 1024 * 64);
 
     this.reset();
-
-    if(OP_TRANSLATION)
-    {
-        this.translator = new DynamicTranslator(this);
-    }
 
     var io = new IO(this);
     this.io = io;
@@ -621,6 +642,38 @@ CPU.prototype.init = function(settings, device_bus)
         a20_byte = out_byte;
     });
 
+    io.register_read(0x511, this, function()
+    {
+        // bios config port (used by seabios and kvm-unit-test)
+        let result = this.fw_value & 0xFF;
+        this.fw_value >>>= 8;
+        return result;
+    });
+    io.register_write(0x510, this, undefined, function(value)
+    {
+        dbg_log("bios config port, index=" + h(value));
+
+        if(value === FW_CFG_SIGNATURE)
+        {
+            // We could pretend to be QEMU here to control certain options in
+            // seabios, but for now this isn't needed
+            this.fw_value = 0xfab0fab0|0;
+        }
+        else if(value === FW_CFG_RAM_SIZE)
+        {
+            this.fw_value = this.memory_size;
+        }
+        else if(value === FW_CFG_NB_CPUS)
+        {
+            this.fw_value = 1;
+        }
+        else
+        {
+            dbg_assert(false, "Unimplemented fw index: " + h(value));
+            this.fw_value = 0;
+        }
+    });
+
     if(DEBUG)
     {
         // Use by linux for port-IO delay
@@ -640,6 +693,7 @@ CPU.prototype.init = function(settings, device_bus)
 
         if(ENABLE_ACPI)
         {
+            this.devices.ioapic = new IOAPIC(this);
             this.devices.apic = new APIC(this);
             this.devices.acpi = new ACPI(this);
         }
@@ -695,9 +749,196 @@ CPU.prototype.init = function(settings, device_bus)
         }
     }
 
+    if(settings.multiboot)
+    {
+        dbg_assert(settings.multiboot.buffer);
+        this.load_multiboot(settings.multiboot.buffer);
+    }
+
     if(DEBUG)
     {
         this.debug.init();
+    }
+};
+
+CPU.prototype.load_multiboot = function(buffer)
+{
+    // https://www.gnu.org/software/grub/manual/multiboot/multiboot.html
+
+    dbg_log("Trying multiboot from buffer of size " + buffer.byteLength, LOG_CPU);
+
+    const MAGIC = 0x1BADB002;
+    const ELF_MAGIC = 0x464C457F;
+    const MULTIBOOT_HEADER_ADDRESS = 0x10000;
+    const MULTIBOOT_SEARCH_BYTES = 8192;
+
+    if(buffer.byteLength < MULTIBOOT_SEARCH_BYTES)
+    {
+        var buf32 = new Int32Array(MULTIBOOT_SEARCH_BYTES / 4);
+        new Uint8Array(buf32.buffer).set(new Uint8Array(buffer));
+    }
+    else
+    {
+        var buf32 = new Int32Array(buffer, 0, MULTIBOOT_SEARCH_BYTES / 4);
+    }
+
+    for(var offset = 0; offset < MULTIBOOT_SEARCH_BYTES; offset += 4)
+    {
+        if(buf32[offset >> 2] === MAGIC)
+        {
+            var flags = buf32[offset + 4 >> 2];
+            var checksum = buf32[offset + 8 >> 2];
+            var total = MAGIC + flags + checksum | 0;
+
+            if(total)
+            {
+                dbg_log("Multiboot checksum check failed", LOG_CPU);
+                continue;
+            }
+        }
+        else
+        {
+            continue;
+        }
+
+        dbg_log("Multiboot magic found, flags: " + h(flags >>> 0, 8), LOG_CPU);
+        dbg_assert((flags & ~MULTIBOOT_HEADER_ADDRESS) === 0, "TODO");
+
+        this.reg32s[reg_eax] = 0x2BADB002;
+
+        let multiboot_info_addr = 0x7C00;
+        this.reg32s[reg_ebx] = multiboot_info_addr;
+        this.write32(multiboot_info_addr, 0);
+
+        this.cr[0] = 1;
+        this.protected_mode = true;
+        this.flags = flags_default;
+        this.update_cs_size(true);
+        this.stack_size_32 = true;
+
+        for(var i = 0; i < 6; i++)
+        {
+            this.segment_is_null[i] = 0;
+            this.segment_offsets[i] = 0;
+            this.segment_limits[i] = 0xFFFFFFFF;
+
+            // Value doesn't matter, OS isn't allowed to reload without setting
+            // up a proper GDT
+            this.sreg[i] = 0xB002;
+        }
+
+        if(flags & MULTIBOOT_HEADER_ADDRESS)
+        {
+            dbg_log("Multiboot specifies its own address table", LOG_CPU);
+
+            var header_addr = buf32[offset + 12 >> 2];
+            var load_addr = buf32[offset + 16 >> 2];
+            var load_end_addr = buf32[offset + 20 >> 2];
+            var bss_end_addr = buf32[offset + 24 >> 2];
+            var entry_addr = buf32[offset + 28 >> 2];
+
+            dbg_log("header=" + h(header_addr, 8) +
+                    " load=" + h(load_addr, 8) +
+                    " load_end=" + h(load_end_addr, 8) +
+                    " bss_end=" + h(bss_end_addr, 8) +
+                    " entry=" + h(entry_addr, 8));
+
+            dbg_assert(load_addr <= header_addr);
+
+            var file_start = offset - (header_addr - load_addr);
+
+            if(load_end_addr === 0)
+            {
+                var length = undefined;
+            }
+            else
+            {
+                dbg_assert(load_end_addr >= load_addr);
+                var length = load_end_addr - load_addr;
+            }
+
+            let blob = new Uint8Array(buffer, file_start, length);
+            this.write_blob(blob, load_addr);
+
+            this.instruction_pointer = this.get_seg(reg_cs) + entry_addr | 0;
+        }
+        else if(buf32[0] === ELF_MAGIC)
+        {
+            dbg_log("Multiboot image is in elf format", LOG_CPU);
+
+            let elf = read_elf(buffer);
+
+            this.instruction_pointer = this.get_seg(reg_cs) + elf.header.entry | 0;
+
+            for(let program of elf.program_headers)
+            {
+                if(program.type === 0)
+                {
+                    // null
+                }
+                else if(program.type === 1)
+                {
+                    // load
+
+                    // Since multiboot specifies that paging is disabled,
+                    // virtual and physical address must be equal
+                    dbg_assert(program.paddr === program.vaddr);
+                    dbg_assert(program.filesz <= program.memsz);
+
+                    let blob = new Uint8Array(buffer, program.offset, program.filesz);
+                    this.write_blob(blob, program.paddr);
+                }
+                else if(program.type === 4 ||
+                        program.type === 0x6474e550 ||
+                        program.type === 0x6474e551)
+                {
+                    // ignore for now
+                }
+                else
+                {
+                    dbg_assert(false, "unimplemented elf section type");
+                }
+            }
+        }
+        else
+        {
+            dbg_assert(false, "Not a bootable multiboot format");
+        }
+
+        // only for kvm-unit-test
+        this.io.register_write_consecutive(0xF4, this,
+            function(value)
+            {
+                console.log("Test exited with code " + h(value, 2));
+                throw "HALT";
+            },
+            function() {},
+            function() {},
+            function() {});
+
+        // only for kvm-unit-test
+        for(let i = 0xE; i <= 0xF; i++)
+        {
+            this.io.register_write(0x2000 + i, this,
+                function(value)
+                {
+                    dbg_log("kvm-unit-test: Set irq " + h(i) + " to " + h(value, 2));
+                    if(value)
+                    {
+                        this.device_raise_irq(i);
+                    }
+                    else
+                    {
+                        this.device_lower_irq(i);
+                    }
+                });
+        }
+
+        dbg_log("Starting multiboot kernel at:", LOG_CPU);
+        this.debug.dump_state();
+        this.debug.dump_regs();
+
+        break;
     }
 };
 
@@ -773,8 +1014,29 @@ CPU.prototype.load_bios = function()
     if(vga_bios)
     {
         // load vga bios
-        data = new Uint8Array(vga_bios);
-        this.write_blob(data, 0xC0000);
+        var vga_bios8 = new Uint8Array(vga_bios);
+
+        // older versions of seabios
+        this.write_blob(vga_bios8, 0xC0000);
+
+        // newer versions of seabios (needs to match pci rom address, see vga.js)
+        this.io.mmap_register(0xFEB00000, 0x100000,
+            function(addr)
+            {
+                addr = (addr - 0xFEB00000) | 0;
+                if(addr < vga_bios8.length)
+                {
+                    return vga_bios8[addr];
+                }
+                else
+                {
+                    return 0;
+                }
+            },
+            function(addr, value)
+            {
+                dbg_assert(false, "Unexpected write to VGA rom");
+            });
     }
     else
     {
@@ -793,7 +1055,6 @@ CPU.prototype.load_bios = function()
             addr &= 0xFFFFF;
             this.mem8[addr] = value;
         }.bind(this));
-
 };
 
 CPU.prototype.do_run = function()
@@ -808,29 +1069,13 @@ CPU.prototype.do_run = function()
     // runs cycles + timers
     for(; now - start < TIME_PER_FRAME;)
     {
-        if(ENABLE_HPET)
-        {
-            this.devices.pit.timer(now, this.devices.hpet.legacy_mode);
-            this.devices.rtc.timer(now, this.devices.hpet.legacy_mode);
-            this.devices.hpet.timer(now);
-        }
-        else
-        {
-            this.devices.pit.timer(now, false);
-            this.devices.rtc.timer(now, false);
-        }
-
-        if(ENABLE_ACPI)
-        {
-            this.devices.apic.timer(now);
-        }
-
+        this.run_hardware_timers(now);
         this.handle_irqs();
+
         this.do_many_cycles();
 
         if(this.in_hlt)
         {
-            this.hlt_loop();
             return;
         }
 
@@ -857,7 +1102,7 @@ CPU.prototype.do_many_cycles_unsafe = function()
     {
         this.cycle_internal();
     }
-}
+};
 
 // Some functions must not be inlined, because then more code is in the
 // deoptimized try-catch block.
@@ -869,7 +1114,7 @@ if(typeof window !== "undefined")
         CPU.prototype.do_many_cycles_unsafe,
         CPU.prototype.do_many_cycles,
     ];
-};
+}
 
 /** @const */
 var PROFILING = false;
@@ -887,7 +1132,7 @@ if(PROFILING)
             total: instruction_total[i],
             count: instruction_count[i],
             per: (instruction_total[i] / instruction_count[i]) || 0,
-        }
+        };
 
         console.log("count:");
         console.table(prof_instructions.sort((p0, p1) => p1.count - p0.count));
@@ -897,7 +1142,7 @@ if(PROFILING)
 
         console.log("time/count:");
         console.table(prof_instructions.sort((p0, p1) => p1.per - p0.per));
-    }
+    };
 }
 
 /**
@@ -953,9 +1198,24 @@ CPU.prototype.cycle = function()
     }
 };
 
+CPU.prototype.segment_prefix_op = function(sreg)
+{
+    dbg_assert(sreg <= 5);
+    this.prefixes |= sreg + 1;
+    this.run_prefix_instruction();
+    this.prefixes = 0;
+};
+
 CPU.prototype.run_prefix_instruction = function()
 {
-    this.table[this.read_imm8()](this);
+    if(this.is_osize_32())
+    {
+        this.table32[this.read_imm8()](this);
+    }
+    else
+    {
+        this.table16[this.read_imm8()](this);
+    }
 };
 
 CPU.prototype.hlt_loop = function()
@@ -963,8 +1223,14 @@ CPU.prototype.hlt_loop = function()
     dbg_assert(this.flags & flag_interrupt);
     //dbg_log("In HLT loop", LOG_CPU);
 
-    var now = v86.microtick();
+    this.run_hardware_timers(v86.microtick());
+    this.handle_irqs();
 
+    return 0;
+};
+
+CPU.prototype.run_hardware_timers = function(now)
+{
     if(ENABLE_HPET)
     {
         var pit_time = this.devices.pit.timer(now, this.devices.hpet.legacy_mode);
@@ -979,35 +1245,27 @@ CPU.prototype.hlt_loop = function()
 
     if(ENABLE_ACPI)
     {
+        this.devices.acpi.timer(now);
         this.devices.apic.timer(now);
     }
-
-    return pit_time < rtc_time ? pit_time : rtc_time;
 };
 
 CPU.prototype.clear_prefixes = function()
 {
-    this.repeat_string_prefix = REPEAT_STRING_PREFIX_NONE;
-    this.segment_prefix = SEG_PREFIX_NONE;
-
-    if(this.address_size_32 !== this.is_32)
-    {
-        this.address_size_32 = this.is_32;
-        this.update_address_size();
-    }
-
-    if(this.operand_size_32 !== this.is_32)
-    {
-        this.operand_size_32 = this.is_32;
-        this.update_operand_size();
-    }
+    this.prefixes = 0;
 };
 
-CPU.prototype.cr0_changed = function(old_cr0)
+CPU.prototype.set_cr0 = function(cr0)
 {
     //dbg_log("cr0 = " + h(this.cr[0] >>> 0), LOG_CPU);
 
-    var new_paging = (this.cr[0] & CR0_PG) === CR0_PG;
+    if((cr0 & (CR0_PE | CR0_PG)) === CR0_PG)
+    {
+        // cannot load PG without PE
+        throw this.debug.unimpl("#GP handler");
+    }
+
+    this.cr[0] = cr0;
 
     if(!this.fpu)
     {
@@ -1016,7 +1274,7 @@ CPU.prototype.cr0_changed = function(old_cr0)
     }
     this.cr[0] |= CR0_ET;
 
-    this.paging_changed();
+    var new_paging = (this.cr[0] & CR0_PG) === CR0_PG;
 
     dbg_assert(typeof this.paging === "boolean");
     if(new_paging !== this.paging)
@@ -1025,16 +1283,46 @@ CPU.prototype.cr0_changed = function(old_cr0)
         this.full_clear_tlb();
     }
 
-    if(OP_TRANSLATION && (this.cr[0] ^ old_cr0) & 1)
-    {
-        this.translator.clear_cache();
-    }
+    this.protected_mode = (this.cr[0] & CR0_PE) === CR0_PE;
 };
 
-CPU.prototype.paging_changed = function()
+CPU.prototype.set_cr4 = function(cr4)
 {
-    this.last_virt_eip = -1;
-    this.last_virt_esp = -1;
+    if(cr4 & (1 << 11 | 1 << 12 | 1 << 15 | 1 << 16 | 1 << 19 | 0xFFC00000))
+    {
+        this.trigger_gp(0);
+    }
+
+    if((this.cr[4] ^ cr4) & CR4_PGE)
+    {
+        if(cr4 & CR4_PGE)
+        {
+            // The PGE bit has been enabled. The global TLB is
+            // still empty, so we only have to copy it over
+            this.clear_tlb();
+        }
+        else
+        {
+            // Clear the global TLB
+            this.full_clear_tlb();
+        }
+    }
+
+    this.cr[4] = cr4;
+    this.page_size_extensions = (cr4 & CR4_PSE) ? PSE_ENABLED : 0;
+
+    if(cr4 & CR4_PAE)
+    {
+        throw this.debug.unimpl("PAE");
+    }
+
+    if(cr4 & 0xFFFFF900)
+    {
+        dbg_assert(false, "Unimplemented CR4 bits: " + h(cr4));
+        this.trigger_ud();
+    }
+
+    dbg_log("cr4=" + h(cr4 >>> 0), LOG_CPU);
 };
 
 CPU.prototype.cpl_changed = function()
@@ -1092,21 +1380,61 @@ CPU.prototype.read_imm32s = function()
     return data32;
 };
 
+/*
+ * Create an internal data unit to represent 64 bits of data
+ */
+CPU.prototype.create_atom64s = function(low, high)
+{
+    let data = new Int32Array(2);
+    data[0] = low;
+    data[1] = high;
+    return data;
+};
+
+CPU.prototype.create_atom128s = function(d0, d1, d2, d3)
+{
+    let data = new Int32Array(4);
+    data[0] = d0;
+    data[1] = d1;
+    data[2] = d2;
+    data[3] = d3;
+    return data;
+}
+
 CPU.prototype.read_modrm_byte = function()
 {
     this.modrm_byte = this.read_imm8();
 };
 
+CPU.prototype.read_op0F = CPU.prototype.read_imm8;
 CPU.prototype.read_sib = CPU.prototype.read_imm8;
 CPU.prototype.read_op8 = CPU.prototype.read_imm8;
 CPU.prototype.read_op8s = CPU.prototype.read_imm8s;
 CPU.prototype.read_op16 = CPU.prototype.read_imm16;
 CPU.prototype.read_op32s = CPU.prototype.read_imm32s;
-CPU.prototype.read_second_op8 = CPU.prototype.read_imm8;
-CPU.prototype.read_second_op16 = CPU.prototype.read_imm16;
+CPU.prototype.read_disp8 = CPU.prototype.read_imm8;
 CPU.prototype.read_disp8s = CPU.prototype.read_imm8s;
 CPU.prototype.read_disp16 = CPU.prototype.read_imm16;
 CPU.prototype.read_disp32s = CPU.prototype.read_imm32s;
+
+CPU.prototype.init2 = function () {};
+CPU.prototype.branch_taken = function () {};
+CPU.prototype.branch_not_taken = function () {};
+CPU.prototype.diverged = function () {};
+
+CPU.prototype.modrm_resolve = function(modrm_byte)
+{
+    dbg_assert(modrm_byte < 0xC0);
+
+    return (this.is_asize_32() ? this.modrm_table32 : this.modrm_table16)[modrm_byte](this);
+};
+
+CPU.prototype.sib_resolve = function(mod)
+{
+    return this.sib_table[this.read_sib()](this, mod);
+};
+
+CPU.prototype.clear_instruction_cache = function() {};
 
 // read word from a page boundary, given 2 physical addresses
 CPU.prototype.virt_boundary_read16 = function(low, high)
@@ -1144,7 +1472,7 @@ CPU.prototype.virt_boundary_read32s = function(low, high)
         mid = this.virt_boundary_read16(low + 1 | 0, high - 1 | 0);
     }
 
-    return this.read8(low) | mid << 8 | this.read8(high) << 24;;
+    return this.read8(low) | mid << 8 | this.read8(high) << 24;
 };
 
 CPU.prototype.virt_boundary_write16 = function(low, high, value)
@@ -1221,6 +1549,44 @@ CPU.prototype.safe_read32s = function(addr)
     }
 };
 
+CPU.prototype.safe_read64s = function(addr)
+{
+    let data = this.create_atom64s(0, 0);
+    if(this.paging && (addr & 0xFFF) >= 0xFF9)
+    {
+        data[0] = this.safe_read32s(addr);
+        data[1] = this.safe_read32s(addr + 4 | 0);
+    }
+    else
+    {
+        data[0] = this.read32s(this.translate_address_read(addr));
+        data[1] = this.read32s(this.translate_address_read(addr + 4 | 0));
+    }
+    return data;
+};
+
+CPU.prototype.safe_read128s_aligned = function(addr)
+{
+    dbg_assert((addr & 0xF) === 0);
+    let phys = this.translate_address_read(addr);
+    return this.create_atom128s(
+        this.read32s(phys),
+        this.read32s(phys + 4 | 0),
+        this.read32s(phys + 8 | 0),
+        this.read32s(phys + 12 | 0)
+    );
+};
+
+CPU.prototype.safe_read128s_unaligned = function(addr)
+{
+    return this.create_atom128s(
+        this.safe_read32s(addr),
+        this.safe_read32s(addr + 4 | 0),
+        this.safe_read32s(addr + 8 | 0),
+        this.safe_read32s(addr + 12 | 0)
+    );
+};
+
 CPU.prototype.safe_write8 = function(addr, value)
 {
     dbg_assert(addr < 0x80000000);
@@ -1247,7 +1613,8 @@ CPU.prototype.safe_write32 = function(addr, value)
 
     if((addr & 0xFFF) >= 0xFFD)
     {
-        this.virt_boundary_write32(phys_low, this.translate_address_write(addr + 3 | 0), value);
+        // XXX
+        this.virt_boundary_write32(phys_low, this.translate_address_write(addr + 3 & ~3) | (addr + 3) & 3, value);
     }
     else
     {
@@ -1255,10 +1622,27 @@ CPU.prototype.safe_write32 = function(addr, value)
     }
 };
 
+CPU.prototype.safe_write64 = function(addr, low, high)
+{
+    this.writable_or_pagefault(addr, 8);
+    this.safe_write32(addr, low);
+    this.safe_write32(addr + 4 | 0, high);
+};
+
+CPU.prototype.safe_write128 = function(addr, d0, d1, d2, d3)
+{
+    this.writable_or_pagefault(addr, 16);
+    this.safe_write32(addr, d0);
+    this.safe_write32(addr + 4 | 0, d1);
+    this.safe_write32(addr + 8 | 0, d2);
+    this.safe_write32(addr + 12 | 0, d3);
+};
+
+
 // read 2 or 4 byte from ip, depending on address size attribute
 CPU.prototype.read_moffs = function()
 {
-    if(this.address_size_32)
+    if(this.is_asize_32())
     {
         return this.get_seg_prefix(reg_ds) + this.read_op32s() | 0;
     }
@@ -1282,12 +1666,6 @@ CPU.prototype.get_eflags = function()
 {
     return (this.flags & ~flags_all) | !!this.getcf() | !!this.getpf() << 2 | !!this.getaf() << 4 |
                                   !!this.getzf() << 6 | !!this.getsf() << 7 | !!this.getof() << 11;
-};
-
-CPU.prototype.load_eflags = function()
-{
-    this.flags = this.get_eflags();
-    this.flags_changed = 0;
 };
 
 /**
@@ -1392,8 +1770,9 @@ CPU.prototype.get_real_eip = function()
 CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, error_code)
 {
     //dbg_log("int " + h(interrupt_nr, 2) + " (" + (is_software_int ? "soft" : "hard") + "ware)", LOG_CPU);
-    //this.debug.dump_state();
-    //this.debug.dump_regs_short();
+    CPU_LOG_VERBOSE && this.debug.dump_state("int " + h(interrupt_nr) + " start" +
+        " (" + (is_software_int ? "soft" : "hard") + "ware)");
+    CPU_LOG_VERBOSE && this.debug.dump_regs();
 
     this.debug.debug_interrupt(interrupt_nr);
 
@@ -1458,13 +1837,8 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
             dbg_log("interrupt to task gate: int=" + h(interrupt_nr, 2) + " sel=" + h(selector, 4) + " dpl=" + dpl, LOG_CPU);
             dbg_trace(LOG_CPU);
 
-            this.do_task_switch(selector);
-
-            if(error_code !== false)
-            {
-                // TODO: push16 if in 16 bit mode?
-                this.push32(error_code);
-            }
+            this.do_task_switch(selector, error_code);
+            CPU_LOG_VERBOSE && this.debug.dump_state("int end");
             return;
         }
 
@@ -1497,12 +1871,12 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
         }
         if(!info.is_present)
         {
+            // kvm-unit-test
             dbg_log("not present");
-            throw this.debug.unimpl("#NP handler");
+            this.trigger_np(interrupt_nr << 3 | 2);
         }
 
-        this.load_eflags();
-        var old_flags = this.flags;
+        var old_flags = this.get_eflags();
 
         //dbg_log("interrupt " + h(interrupt_nr, 2) + " (" + (is_software_int ? "soft" : "hard") + "ware) from cpl=" + this.cpl + " vm=" + (this.flags & flag_vm) + " cs:eip=" + h(this.sreg[reg_cs], 4) + ":" + h(this.get_real_eip(), 8) + " to cpl="
 
@@ -1512,11 +1886,19 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
             // interrupt from vm86 mode
 
             //dbg_log("Inter privilege interrupt gate=" + h(selector, 4) + ":" + h(base >>> 0, 8) + " trap=" + is_trap + " 16bit=" + is_16, LOG_CPU);
-            //this.debug.dump_regs_short();
+            //this.debug.dump_regs();
             var tss_stack_addr = this.get_tss_stack_addr(info.dpl);
 
-            var new_esp = this.read32s(tss_stack_addr);
-            var new_ss = this.read16(tss_stack_addr + 4 | 0);
+            if(this.tss_size_32)
+            {
+                var new_esp = this.read32s(tss_stack_addr);
+                var new_ss = this.read16(tss_stack_addr + 4 | 0);
+            }
+            else
+            {
+                var new_esp = this.read16(tss_stack_addr);
+                var new_ss = this.read16(tss_stack_addr + 2 | 0);
+            }
             var ss_info = this.lookup_segment_selector(new_ss);
 
             // Disabled: Incorrect handling of direction bit
@@ -1549,7 +1931,7 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
             if(old_flags & flag_vm)
             {
                 //dbg_log("return from vm86 mode");
-                //this.debug.dump_regs_short();
+                //this.debug.dump_regs();
                 dbg_assert(info.dpl === 0, "switch to non-0 dpl from vm86 mode");
             }
 
@@ -1565,11 +1947,7 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
             this.cpl = info.dpl;
             this.cpl_changed();
 
-            dbg_assert(typeof info.size === "boolean");
-            if(this.is_32 !== info.size)
-            {
-                this.update_cs_size(info.size);
-            }
+            this.update_cs_size(info.size);
 
             this.flags &= ~flag_vm & ~flag_rf;
 
@@ -1609,7 +1987,7 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
             //dbg_log("Intra privilege interrupt gate=" + h(selector, 4) + ":" + h(base >>> 0, 8) +
             //        " trap=" + is_trap + " 16bit=" + is_16 +
             //        " cpl=" + this.cpl + " dpl=" + info.dpl + " conforming=" + +info.dc_bit, LOG_CPU);
-            //this.debug.dump_regs_short();
+            //this.debug.dump_regs();
 
             if(this.flags & flag_vm)
             {
@@ -1662,15 +2040,10 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
             this.switch_seg(reg_es, 0);
         }
 
-
         this.sreg[reg_cs] = selector & ~3 | this.cpl;
+        dbg_assert((this.sreg[reg_cs] & 3) === this.cpl);
 
-        dbg_assert(typeof info.size === "boolean");
-        dbg_assert(typeof this.is_32 === "boolean");
-        if(this.is_32 !== info.size)
-        {
-            this.update_cs_size(info.size);
-        }
+        this.update_cs_size(info.size);
 
         this.segment_limits[reg_cs] = info.effective_limit;
         this.segment_offsets[reg_cs] = info.base;
@@ -1701,8 +2074,7 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
         var new_cs = this.read16(index + 2 | 0);
 
         // push flags, cs:ip
-        this.load_eflags();
-        this.push16(this.flags);
+        this.push16(this.get_eflags());
         this.push16(this.sreg[reg_cs]);
         this.push16(this.get_real_eip());
 
@@ -1713,7 +2085,7 @@ CPU.prototype.call_interrupt_vector = function(interrupt_nr, is_software_int, er
     }
 
     //dbg_log("int to:", LOG_CPU);
-    //this.debug.dump_state();
+    CPU_LOG_VERBOSE && this.debug.dump_state("int end");
 };
 
 CPU.prototype.iret16 = function()
@@ -1729,8 +2101,15 @@ CPU.prototype.iret32 = function()
 CPU.prototype.iret = function(is_16)
 {
     //dbg_log("iret is_16=" + is_16, LOG_CPU);
-    //this.debug.dump_state();
-    //this.debug.dump_regs_short();
+    CPU_LOG_VERBOSE && this.debug.dump_state("iret" + (is_16 ? "16" : "32") + " start");
+    //this.debug.dump_regs();
+
+    if(this.vm86_mode() && this.getiopl() < 3)
+    {
+        // vm86 mode, iopl != 3
+        dbg_log("#gp iret vm86 mode, iopl != 3", LOG_CPU);
+        this.trigger_gp(0);
+    }
 
     if(is_16)
     {
@@ -1767,18 +2146,13 @@ CPU.prototype.iret = function(is_16)
         }
 
         //dbg_log("iret32 to:", LOG_CPU);
-        //this.debug.dump_state();
+        CPU_LOG_VERBOSE && this.debug.dump_state("iret end");
 
         this.handle_irqs();
         return;
     }
 
-    if(this.vm86_mode())
-    {
-        // vm86 mode, iopl != 3
-        dbg_log("#gp iret vm86 mode, iopl != 3", LOG_CPU)
-        this.trigger_gp(0);
-    }
+    dbg_assert(!this.vm86_mode());
 
     if(this.flags & flag_nt)
     {
@@ -1834,8 +2208,8 @@ CPU.prototype.iret = function(is_16)
             this.update_cs_size(false);
 
             //dbg_log("iret32 to:", LOG_CPU);
-            //this.debug.dump_state();
-            //this.debug.dump_regs_short();
+            CPU_LOG_VERBOSE && this.debug.dump_state("iret end");
+            //this.debug.dump_regs();
 
             return;
         }
@@ -1874,6 +2248,11 @@ CPU.prototype.iret = function(is_16)
         throw this.debug.unimpl("conforming and dpl > rpl");
     }
 
+    if(!info.dc_bit && info.rpl !== info.dpl)
+    {
+        dbg_log("#gp iret: non-conforming cs and rpl != dpl, dpl=" + info.dpl + " rpl=" + info.rpl, LOG_CPU);
+        this.trigger_gp(new_cs & ~3);
+    }
 
     if(info.rpl > this.cpl)
     {
@@ -1887,6 +2266,34 @@ CPU.prototype.iret = function(is_16)
         {
             var temp_esp = this.safe_read32s(this.get_stack_pointer(12));
             var temp_ss = this.safe_read16(this.get_stack_pointer(16));
+        }
+
+        var ss_info = this.lookup_segment_selector(temp_ss);
+        var new_cpl = info.rpl;
+
+        if(ss_info.is_null)
+        {
+            dbg_log("#GP for loading 0 in SS sel=" + h(temp_ss, 4), LOG_CPU);
+            dbg_trace(LOG_CPU);
+            this.trigger_gp(0);
+        }
+
+        if(!ss_info.is_valid ||
+           ss_info.is_system ||
+           ss_info.rpl !== new_cpl ||
+           !ss_info.is_writable ||
+           ss_info.dpl !== new_cpl)
+        {
+            dbg_log("#GP for loading invalid in SS sel=" + h(temp_ss, 4), LOG_CPU);
+            dbg_trace(LOG_CPU);
+            this.trigger_gp(temp_ss & ~3);
+        }
+
+        if(!ss_info.is_present)
+        {
+            dbg_log("#SS for loading non-present in SS sel=" + h(temp_ss, 4), LOG_CPU);
+            dbg_trace(LOG_CPU);
+            this.trigger_ss(temp_ss & ~3);
         }
 
         // no exceptions below
@@ -1905,7 +2312,6 @@ CPU.prototype.iret = function(is_16)
 
         //dbg_log("outer privilege return: from=" + this.cpl + " to=" + info.rpl + " ss:esp=" + h(temp_ss, 4) + ":" + h(temp_esp >>> 0, 8), LOG_CPU);
 
-        // XXX: Can raise, conditions should be checked before side effects
         this.switch_seg(reg_ss, temp_ss);
 
         this.set_stack_reg(temp_esp);
@@ -1949,20 +2355,16 @@ CPU.prototype.iret = function(is_16)
     }
 
     this.sreg[reg_cs] = new_cs;
+    dbg_assert((new_cs & 3) === this.cpl);
 
-    dbg_assert(typeof info.size === "boolean");
-    if(info.size !== this.is_32)
-    {
-        this.update_cs_size(info.size);
-    }
+    this.update_cs_size(info.size);
 
     this.segment_limits[reg_cs] = info.effective_limit;
     this.segment_offsets[reg_cs] = info.base;
 
     this.instruction_pointer = new_eip + this.get_seg(reg_cs) | 0;
 
-    //dbg_log("iret is_16=" + is_16 + " to:", LOG_CPU);
-    //this.debug.dump_state();
+    CPU_LOG_VERBOSE && this.debug.dump_state("iret" + (is_16 ? "16" : "32") + " end");
 
     this.handle_irqs();
 };
@@ -1981,9 +2383,7 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
     dbg_assert(typeof selector === "number" && selector < 0x10000 && selector >= 0);
 
     //dbg_log("far return eip=" + h(eip >>> 0, 8) + " cs=" + h(selector, 4) + " stack_adjust=" + h(stack_adjust), LOG_CPU);
-    //this.debug.dump_state();
-
-    this.protected_mode = (this.cr[0] & CR0_PE) === CR0_PE;
+    CPU_LOG_VERBOSE && this.debug.dump_state("far ret start");
 
     if(!this.protected_mode)
     {
@@ -1995,7 +2395,7 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
     {
         this.switch_cs_real_mode(selector);
         this.instruction_pointer = this.get_seg(reg_cs) + eip | 0;
-        this.adjust_stack_reg(2 * (this.operand_size_32 ? 4 : 2) + stack_adjust);
+        this.adjust_stack_reg(2 * (this.is_osize_32() ? 4 : 2) + stack_adjust);
         return;
     }
 
@@ -2052,20 +2452,20 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
 
     if(info.rpl > this.cpl)
     {
-        dbg_log("far return privilege change cs: " + h(selector) + " from=" + this.cpl + " to=" + info.rpl + " is_16=" + this.operand_size_32, LOG_CPU);
+        dbg_log("far return privilege change cs: " + h(selector) + " from=" + this.cpl + " to=" + info.rpl + " is_16=" + this.is_osize_32(), LOG_CPU);
 
-        if(this.operand_size_32)
+        if(this.is_osize_32())
         {
-            dbg_log("esp read from " + h(this.translate_address_system_read(this.get_stack_pointer(stack_adjust + 8))))
+            //dbg_log("esp read from " + h(this.translate_address_system_read(this.get_stack_pointer(stack_adjust + 8))))
             var temp_esp = this.safe_read32s(this.get_stack_pointer(stack_adjust + 8));
-            dbg_log("esp=" + h(temp_esp));
+            //dbg_log("esp=" + h(temp_esp));
             var temp_ss = this.safe_read16(this.get_stack_pointer(stack_adjust + 12));
         }
         else
         {
-            dbg_log("esp read from " + h(this.translate_address_system_read(this.get_stack_pointer(stack_adjust + 4))));
+            //dbg_log("esp read from " + h(this.translate_address_system_read(this.get_stack_pointer(stack_adjust + 4))));
             var temp_esp = this.safe_read16(this.get_stack_pointer(stack_adjust + 4));
-            dbg_log("esp=" + h(temp_esp));
+            //dbg_log("esp=" + h(temp_esp));
             var temp_ss = this.safe_read16(this.get_stack_pointer(stack_adjust + 6));
         }
 
@@ -2076,7 +2476,7 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
         this.switch_seg(reg_ss, temp_ss);
         this.set_stack_reg(temp_esp + stack_adjust);
 
-        //if(this.operand_size_32)
+        //if(this.is_osize_32())
         //{
         //    this.adjust_stack_reg(2 * 4);
         //}
@@ -2091,7 +2491,7 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
     }
     else
     {
-        if(this.operand_size_32)
+        if(this.is_osize_32())
         {
             this.adjust_stack_reg(2 * 4 + stack_adjust);
         }
@@ -2103,11 +2503,7 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
 
     //dbg_assert(this.cpl === info.dpl);
 
-    dbg_assert(typeof info.size === "boolean");
-    if(info.size !== this.is_32)
-    {
-        this.update_cs_size(info.size);
-    }
+    this.update_cs_size(info.size);
 
     this.segment_is_null[reg_cs] = 0;
     this.segment_limits[reg_cs] = info.effective_limit;
@@ -2116,10 +2512,12 @@ CPU.prototype.far_return = function(eip, selector, stack_adjust)
     this.segment_offsets[reg_cs] = info.base;
     this.sreg[reg_cs] = selector;
 
+    dbg_assert((selector & 3) === this.cpl);
+
     this.instruction_pointer = this.get_seg(reg_cs) + eip | 0;
 
     //dbg_log("far return to:", LOG_CPU)
-    //this.debug.dump_state();
+    CPU_LOG_VERBOSE && this.debug.dump_state("far ret end");
 };
 
 CPU.prototype.far_jump = function(eip, selector, is_call)
@@ -2127,15 +2525,13 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
     dbg_assert(typeof selector === "number" && selector < 0x10000 && selector >= 0);
 
     //dbg_log("far " + ["jump", "call"][+is_call] + " eip=" + h(eip >>> 0, 8) + " cs=" + h(selector, 4), LOG_CPU);
-    //this.debug.dump_state();
-
-    this.protected_mode = (this.cr[0] & CR0_PE) === CR0_PE;
+    CPU_LOG_VERBOSE && this.debug.dump_state("far " + ["jump", "call"][+is_call]);
 
     if(!this.protected_mode || this.vm86_mode())
     {
         if(is_call)
         {
-            if(this.operand_size_32)
+            if(this.is_osize_32())
             {
                 this.writable_or_pagefault(this.get_stack_pointer(-8), 8);
                 this.push32(this.sreg[reg_cs]);
@@ -2169,7 +2565,7 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
 
     if(info.is_system)
     {
-        dbg_assert(is_call, "TODO: Jump")
+        dbg_assert(is_call, "TODO: Jump");
 
         dbg_log("system type cs: " + h(selector), LOG_CPU);
 
@@ -2223,15 +2619,21 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
                 this.trigger_np(cs_selector & ~3);
             }
 
-            //debugger;
-
             if(!cs_info.dc_bit && cs_info.dpl < this.cpl)
             {
                 dbg_log("more privilege call gate is_16=" + is_16 + " from=" + this.cpl + " to=" + cs_info.dpl);
                 var tss_stack_addr = this.get_tss_stack_addr(cs_info.dpl);
 
-                var new_esp = this.read32s(tss_stack_addr);
-                var new_ss = this.read16(tss_stack_addr + 4 | 0);
+                if(this.tss_size_32)
+                {
+                    var new_esp = this.read32s(tss_stack_addr);
+                    var new_ss = this.read16(tss_stack_addr + 4 | 0);
+                }
+                else
+                {
+                    var new_esp = this.read16(tss_stack_addr);
+                    var new_ss = this.read16(tss_stack_addr + 2 | 0);
+                }
                 var ss_info = this.lookup_segment_selector(new_ss);
 
                 // Disabled: Incorrect handling of direction bit
@@ -2258,38 +2660,53 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
                     throw this.debug.unimpl("#SS handler");
                 }
 
+                var parameter_count = info.raw1 & 0x1F;
+                var stack_space = is_16 ? 4 : 8;
+                if(is_call)
+                {
+                    stack_space += is_16 ? 4 + 2 * parameter_count : 8 + 4 * parameter_count;
+                }
+                if(ss_info.size)
+                {
+                    //try {
+                    this.writable_or_pagefault(ss_info.base + new_esp - stack_space | 0, stack_space); // , cs_info.dpl
+                    //} catch(e) { debugger; }
+                }
+                else
+                {
+                    //try {
+                    this.writable_or_pagefault(ss_info.base + (new_esp - stack_space & 0xFFFF) | 0, stack_space); // , cs_info.dpl
+                    //} catch(e) { debugger; }
+                }
+
                 var old_esp = this.reg32s[reg_esp];
                 var old_ss = this.sreg[reg_ss];
                 var old_stack_pointer = this.get_stack_pointer(0);
 
-                dbg_log("old_esp=" + h(old_esp));
+                //dbg_log("old_esp=" + h(old_esp));
 
                 this.cpl = cs_info.dpl;
                 this.cpl_changed();
 
-                if(this.is_32 !== cs_info.size)
-                {
-                    this.update_cs_size(cs_info.size);
-                }
+                this.update_cs_size(cs_info.size);
 
                 this.switch_seg(reg_ss, new_ss);
                 this.set_stack_reg(new_esp);
 
-                var parameter_count = info.raw1 & 0x1F;
-                dbg_log("parameter_count=" + parameter_count);
+                //dbg_log("parameter_count=" + parameter_count);
                 //dbg_assert(parameter_count === 0, "TODO");
 
                 if(is_16)
                 {
                     this.push16(old_ss);
                     this.push16(old_esp);
-                    dbg_log("old esp written to " + h(this.translate_address_system_read(this.get_stack_pointer(0))));
+                    //dbg_log("old esp written to " + h(this.translate_address_system_read(this.get_stack_pointer(0))));
                 }
                 else
                 {
                     this.push32(old_ss);
                     this.push32(old_esp);
-                    dbg_log("old esp written to " + h(this.translate_address_system_read(this.get_stack_pointer(0))));
+                    //dbg_log("old esp written to " + h(this.translate_address_system_read(this.get_stack_pointer(0))));
                 }
 
                 if(is_call)
@@ -2302,7 +2719,7 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
                             this.push16(parameter);
                         }
 
-                        this.writable_or_pagefault(this.get_stack_pointer(-4), 4);
+                        //this.writable_or_pagefault(this.get_stack_pointer(-4), 4);
                         this.push16(this.sreg[reg_cs]);
                         this.push16(this.get_real_eip());
                     }
@@ -2314,7 +2731,7 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
                             this.push32(parameter);
                         }
 
-                        this.writable_or_pagefault(this.get_stack_pointer(-8), 8);
+                        //this.writable_or_pagefault(this.get_stack_pointer(-8), 8);
                         this.push32(this.sreg[reg_cs]);
                         this.push32(this.get_real_eip());
                     }
@@ -2352,16 +2769,14 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
             dbg_log("call gate eip=" + h(new_eip >>> 0) + " cs=" + h(cs_selector) + " conforming=" + cs_info.dc_bit);
             dbg_assert((new_eip >>> 0) <= cs_info.effective_limit, "todo: #gp");
 
-            if(cs_info.size !== this.is_32)
-            {
-                this.update_cs_size(cs_info.size);
-            }
+            this.update_cs_size(cs_info.size);
 
             this.segment_is_null[reg_cs] = 0;
             this.segment_limits[reg_cs] = cs_info.effective_limit;
             //this.segment_infos[reg_cs] = 0; // TODO
             this.segment_offsets[reg_cs] = cs_info.base;
             this.sreg[reg_cs] = cs_selector & ~3 | this.cpl;
+            dbg_assert((this.sreg[reg_cs] & 3) === this.cpl);
 
             this.instruction_pointer = this.get_seg(reg_cs) + new_eip | 0;
         }
@@ -2408,7 +2823,7 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
 
         if(is_call)
         {
-            if(this.operand_size_32)
+            if(this.is_osize_32())
             {
                 this.writable_or_pagefault(this.get_stack_pointer(-8), 8);
                 this.push32(this.sreg[reg_cs]);
@@ -2424,10 +2839,7 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
 
         dbg_assert((eip >>> 0) <= info.effective_limit, "todo: #gp");
 
-        if(info.size !== this.is_32)
-        {
-            this.update_cs_size(info.size);
-        }
+        this.update_cs_size(info.size);
 
         this.segment_is_null[reg_cs] = 0;
         this.segment_limits[reg_cs] = info.effective_limit;
@@ -2440,34 +2852,55 @@ CPU.prototype.far_jump = function(eip, selector, is_call)
     }
 
     //dbg_log("far " + ["jump", "call"][+is_call] + " to:", LOG_CPU)
-    //this.debug.dump_state();
+    CPU_LOG_VERBOSE && this.debug.dump_state("far " + ["jump", "call"][+is_call] + " end");
 };
 
 CPU.prototype.get_tss_stack_addr = function(dpl)
 {
-    var tss_stack_addr = (dpl << 3) + 4 | 0;
-
-    if((tss_stack_addr + 5 | 0) > this.segment_limits[reg_tr])
+    if(this.tss_size_32)
     {
-        throw this.debug.unimpl("#TS handler");
-    }
+        var tss_stack_addr = (dpl << 3) + 4 | 0;
 
-    tss_stack_addr = tss_stack_addr + this.segment_offsets[reg_tr] | 0;
+        if((tss_stack_addr + 5 | 0) > this.segment_limits[reg_tr])
+        {
+            throw this.debug.unimpl("#TS handler");
+        }
+
+        tss_stack_addr = tss_stack_addr + this.segment_offsets[reg_tr] | 0;
+
+        dbg_assert((tss_stack_addr & 0xFFF) <= 0x1000 - 6);
+    }
+    else
+    {
+        var tss_stack_addr = (dpl << 2) + 2 | 0;
+
+        if((tss_stack_addr + 5 | 0) > this.segment_limits[reg_tr])
+        {
+            throw this.debug.unimpl("#TS handler");
+        }
+
+        tss_stack_addr = tss_stack_addr + this.segment_offsets[reg_tr] | 0;
+        dbg_assert((tss_stack_addr & 0xFFF) <= 0x1000 - 4);
+    }
 
     if(this.paging)
     {
         tss_stack_addr = this.translate_address_system_read(tss_stack_addr);
     }
 
-    dbg_assert((tss_stack_addr & 0xFFF) <= 0x1000 - 6);
-
     return tss_stack_addr;
 };
 
-CPU.prototype.do_task_switch = function(selector)
+CPU.prototype.do_task_switch = function(selector, error_code)
 {
+    dbg_assert(this.tss_size_32, "TODO");
+
     dbg_log("do_task_switch sel=" + h(selector), LOG_CPU);
     var descriptor = this.lookup_segment_selector(selector);
+
+    dbg_assert((descriptor.type | 2) === 3 || (descriptor.type | 2) === 0xb);
+    var tss_is_16 = descriptor.type <= 3;
+    var tss_is_busy = (descriptor.type & 2) === 2;
 
     if(!descriptor.is_valid || descriptor.is_null || !descriptor.from_gdt)
     {
@@ -2495,15 +2928,16 @@ CPU.prototype.do_task_switch = function(selector)
 
     var old_eflags = this.get_eflags();
 
-    //if(false /* is iret */)
-    //{
-    //    old_eflags &= ~flag_nt;
-    //}
+    if(tss_is_busy)
+    {
+        old_eflags &= ~flag_nt;
+    }
 
     this.writable_or_pagefault(tsr_offset, 0x66);
 
     //this.safe_write32(tsr_offset + TSR_CR3, this.cr[3]);
 
+    // TODO: Write 16 bit values if old tss is 16 bit
     this.safe_write32(tsr_offset + TSR_EIP, this.get_real_eip());
     this.safe_write32(tsr_offset + TSR_EFLAGS, old_eflags);
 
@@ -2523,7 +2957,8 @@ CPU.prototype.do_task_switch = function(selector)
     this.safe_write32(tsr_offset + TSR_DS, this.sreg[reg_ds]);
     this.safe_write32(tsr_offset + TSR_FS, this.sreg[reg_fs]);
     this.safe_write32(tsr_offset + TSR_GS, this.sreg[reg_gs]);
-    this.safe_write32(tsr_offset + TSR_LDT, this.sreg[reg_ldtr]);
+
+    //this.safe_write32(tsr_offset + TSR_LDT, this.sreg[reg_ldtr]);
 
     if(true /* is jump or call or int */)
     {
@@ -2534,12 +2969,73 @@ CPU.prototype.do_task_switch = function(selector)
     //var new_tsr_size = descriptor.effective_limit;
     var new_tsr_offset = descriptor.base;
 
+    dbg_assert(!tss_is_16, "unimplemented");
+
+    if(true /* is call or int */)
+    {
+        this.safe_write16(new_tsr_offset + TSR_BACKLINK, this.sreg[reg_tr]);
+    }
+
     var new_cr3 = this.safe_read32s(new_tsr_offset + TSR_CR3);
 
     this.flags &= ~flag_vm;
 
-    dbg_assert(false);
-    this.switch_seg(reg_cs, this.safe_read16(new_tsr_offset + TSR_CS));
+    var new_eip = this.safe_read32s(new_tsr_offset + TSR_EIP);
+    var new_cs = this.safe_read16(new_tsr_offset + TSR_CS);
+    var info = this.lookup_segment_selector(new_cs);
+
+    if(info.is_null)
+    {
+        dbg_log("null cs", LOG_CPU);
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    if(!info.is_valid)
+    {
+        dbg_log("invalid cs: " + h(selector), LOG_CPU);
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    if(info.is_system)
+    {
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    if(!info.is_executable)
+    {
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    if(info.dc_bit && info.dpl > info.rpl)
+    {
+        dbg_log("cs conforming and dpl > rpl: " + h(selector), LOG_CPU);
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    if(!info.dc_bit && info.dpl !== info.rpl)
+    {
+        dbg_log("cs non-conforming and dpl != rpl: " + h(selector), LOG_CPU);
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    if(!info.is_present)
+    {
+        dbg_log("#NP for loading not-present in cs sel=" + h(selector, 4), LOG_CPU);
+        throw this.debug.unimpl("#TS handler");
+    }
+
+    this.segment_is_null[reg_cs] = 0;
+    this.segment_limits[reg_cs] = info.effective_limit;
+    this.segment_offsets[reg_cs] = info.base;
+    this.sreg[reg_cs] = new_cs;
+
+    this.cpl = info.dpl;
+    this.cpl_changed();
+
+    dbg_assert((this.sreg[reg_cs] & 3) === this.cpl);
+
+    dbg_assert((new_eip >>> 0) <= info.effective_limit, "todo: #gp");
+    this.update_cs_size(info.size);
 
     var new_eflags = this.safe_read32s(new_tsr_offset + TSR_EFLAGS);
 
@@ -2555,6 +3051,11 @@ CPU.prototype.do_task_switch = function(selector)
     }
 
     this.update_eflags(new_eflags);
+
+    if(true /* call or int */)
+    {
+        this.flags |= flag_nt;
+    }
 
     var new_ldt = this.safe_read16(new_tsr_offset + TSR_LDT);
     this.load_ldt(new_ldt);
@@ -2575,7 +3076,7 @@ CPU.prototype.do_task_switch = function(selector)
     this.switch_seg(reg_fs, this.safe_read16(new_tsr_offset + TSR_FS));
     this.switch_seg(reg_gs, this.safe_read16(new_tsr_offset + TSR_GS));
 
-    this.instruction_pointer = this.get_seg(reg_cs) + this.safe_read32s(new_tsr_offset + TSR_EIP) | 0;
+    this.instruction_pointer = this.get_seg(reg_cs) + new_eip | 0;
 
     this.segment_offsets[reg_tr] = descriptor.base;
     this.segment_limits[reg_tr] = descriptor.effective_limit;
@@ -2586,6 +3087,18 @@ CPU.prototype.do_task_switch = function(selector)
     this.clear_tlb();
 
     this.cr[0] |= CR0_TS;
+
+    if(error_code !== false)
+    {
+        if(tss_is_16)
+        {
+            this.push16(error_code & 0xFFFF);
+        }
+        else
+        {
+            this.push32(error_code);
+        }
+    }
 };
 
 CPU.prototype.hlt_op = function()
@@ -2595,10 +3108,10 @@ CPU.prototype.hlt_op = function()
         this.trigger_gp(0);
     }
 
-    // hlt
     if((this.flags & flag_interrupt) === 0)
     {
         this.debug.show("cpu halted");
+        this.bus.send("cpu-event-halt");
         if(DEBUG) this.debug.dump_regs();
         throw "HALT";
     }
@@ -2606,7 +3119,20 @@ CPU.prototype.hlt_op = function()
     {
         // get out of here and into hlt_loop
         this.in_hlt = true;
-        throw MAGIC_CPU_EXCEPTION;
+
+        //if(false) // possibly unsafe, test in safari
+        //{
+        //    this.hlt_loop();
+        //    this.diverged();
+        //    if(this.in_hlt)
+        //    {
+        //        throw MAGIC_CPU_EXCEPTION;
+        //    }
+        //}
+        //else
+        {
+            throw MAGIC_CPU_EXCEPTION;
+        }
     }
 };
 
@@ -2618,7 +3144,7 @@ CPU.prototype.raise_exception = function(interrupt_nr)
     //    // show interesting exceptions
     //    dbg_log("Exception " + h(interrupt_nr) + " at " + h(this.previous_ip >>> 0, 8) + " (cs=" + h(this.sreg[reg_cs], 4) + ")", LOG_CPU);
     //    dbg_trace(LOG_CPU);
-    //    this.debug.dump_regs_short();
+    //    this.debug.dump_regs();
     //    this.debug.dump_state();
     //}
 
@@ -2628,11 +3154,13 @@ CPU.prototype.raise_exception = function(interrupt_nr)
 
 CPU.prototype.raise_exception_with_code = function(interrupt_nr, error_code)
 {
+    dbg_assert(typeof error_code === "number");
+
     //if(DEBUG)
     //{
     //    dbg_log("Exception " + h(interrupt_nr) + " err=" + h(error_code) + " at " + h(this.previous_ip >>> 0, 8) + " (cs=" + h(this.sreg[reg_cs], 4) + ")", LOG_CPU);
     //    dbg_trace(LOG_CPU);
-    //    this.debug.dump_regs_short();
+    //    this.debug.dump_regs();
     //}
 
     this.call_interrupt_vector(interrupt_nr, false, error_code);
@@ -2690,6 +3218,23 @@ CPU.prototype.task_switch_test = function()
     }
 };
 
+// used before mmx instructions
+CPU.prototype.task_switch_test_mmx = function()
+{
+    if(this.cr[0] & (CR0_EM | CR0_TS))
+    {
+        if(this.cr[0] & CR0_TS)
+        {
+            this.trigger_nm();
+        }
+        else
+        {
+            this.trigger_ud();
+        }
+    }
+
+};
+
 CPU.prototype.todo = function()
 {
     if(DEBUG)
@@ -2703,17 +3248,14 @@ CPU.prototype.todo = function()
 
 CPU.prototype.undefined_instruction = function()
 {
-    if(DEBUG)
-    {
-        throw "Possible fault: undefined instruction";
-    }
-
+    dbg_assert(false, "Possible fault: undefined instruction");
     this.trigger_ud();
 };
 
 CPU.prototype.unimplemented_sse = function()
 {
     dbg_log("No SSE", LOG_CPU);
+    dbg_assert(false);
     this.trigger_ud();
 };
 
@@ -2738,17 +3280,22 @@ CPU.prototype.get_seg_prefix_cs = function()
  */
 CPU.prototype.get_seg_prefix = function(default_segment /*, offset*/)
 {
-    if(this.segment_prefix === SEG_PREFIX_NONE)
+    var prefix = this.prefixes & PREFIX_MASK_SEGMENT;
+
+    if(prefix)
     {
-        return this.get_seg(default_segment /*, offset*/);
-    }
-    else if(this.segment_prefix === SEG_PREFIX_ZERO)
-    {
-        return 0;
+        if(prefix === SEG_PREFIX_ZERO)
+        {
+            return 0;
+        }
+        else
+        {
+            return this.get_seg(prefix - 1 /*, offset*/);
+        }
     }
     else
     {
-        return this.get_seg(this.segment_prefix /*, offset*/);
+        return this.get_seg(default_segment /*, offset*/);
     }
 };
 
@@ -2765,6 +3312,7 @@ CPU.prototype.get_seg = function(segment /*, offset*/)
         if(this.segment_is_null[segment])
         {
             dbg_assert(segment !== reg_cs && segment !== reg_ss);
+            dbg_trace();
             dbg_log("#gp Use null segment: " + segment + " sel=" + h(this.sreg[segment], 4), LOG_CPU);
 
             this.trigger_gp(0);
@@ -2820,6 +3368,71 @@ CPU.prototype.read_e32 = function()
     return this.read_e32s() >>> 0;
 };
 
+CPU.prototype.read_mmx_mem32s = function()
+{
+    if(this.modrm_byte < 0xC0) {
+        return this.safe_read32s(this.modrm_resolve(this.modrm_byte));
+    } else {
+        // Returning lower dword of qword
+        return this.reg_mmxs[2 * (this.modrm_byte & 7)];
+    }
+};
+
+CPU.prototype.read_mmx_mem64s = function()
+{
+    if(this.modrm_byte < 0xC0) {
+        return this.safe_read64s(this.modrm_resolve(this.modrm_byte));
+    } else {
+        return this.create_atom64s(
+            this.reg_mmxs[2 * (this.modrm_byte & 7)],
+            this.reg_mmxs[2 * (this.modrm_byte & 7) + 1]
+        );
+    }
+};
+
+CPU.prototype.read_xmm_mem64s = function()
+{
+    if(this.modrm_byte < 0xC0) {
+        return this.safe_read64s(this.modrm_resolve(this.modrm_byte));
+    } else {
+        let i = (this.modrm_byte & 7) << 2;
+        return this.create_atom64s(
+            this.reg_xmm32s[i],
+            this.reg_xmm32s[i | 1]
+        );
+    }
+};
+
+CPU.prototype.read_xmm_mem128s = function()
+{
+    if(this.modrm_byte < 0xC0) {
+        return this.safe_read128s_aligned(this.modrm_resolve(this.modrm_byte));
+    } else {
+        let i = (this.modrm_byte & 7) << 2;
+        return this.create_atom128s(
+            this.reg_xmm32s[i],
+            this.reg_xmm32s[i | 1],
+            this.reg_xmm32s[i | 2],
+            this.reg_xmm32s[i | 3]
+        );
+    }
+};
+
+CPU.prototype.read_xmm_mem128s_unaligned = function()
+{
+    if(this.modrm_byte < 0xC0) {
+        return this.safe_read128s_unaligned(this.modrm_resolve(this.modrm_byte));
+    } else {
+        let i = (this.modrm_byte & 7) << 2;
+        return this.create_atom128s(
+            this.reg_xmm32s[i],
+            this.reg_xmm32s[i | 1],
+            this.reg_xmm32s[i | 2],
+            this.reg_xmm32s[i | 3]
+        );
+    }
+};
+
 CPU.prototype.set_e8 = function(value)
 {
     if(this.modrm_byte < 0xC0) {
@@ -2850,6 +3463,16 @@ CPU.prototype.set_e32 = function(value)
     }
 };
 
+CPU.prototype.set_mmx_mem64s = function(low, high)
+{
+    if(this.modrm_byte < 0xC0) {
+        var addr = this.modrm_resolve(this.modrm_byte);
+        this.safe_write64(addr, low, high);
+    } else {
+        this.reg_mmxs[2 * (this.modrm_byte & 7)] = low;
+        this.reg_mmxs[2 * (this.modrm_byte & 7) + 1] = high;
+    }
+};
 
 CPU.prototype.read_write_e8 = function()
 {
@@ -2909,7 +3532,8 @@ CPU.prototype.read_write_e32 = function()
         var virt_addr = this.modrm_resolve(this.modrm_byte);
         this.phys_addr = this.translate_address_write(virt_addr);
         if(this.paging && (virt_addr & 0xFFF) >= 0xFFD) {
-            this.phys_addr_high = this.translate_address_write(virt_addr + 3 | 0);
+            //this.phys_addr_high = this.translate_address_write(virt_addr + 3 | 0);
+            this.phys_addr_high = this.translate_address_write(virt_addr + 3 & ~3) | (virt_addr + 3) & 3;
             dbg_assert(this.phys_addr_high);
             return this.virt_boundary_read32s(this.phys_addr, this.phys_addr_high);
         } else {
@@ -2937,12 +3561,12 @@ CPU.prototype.write_e32 = function(value)
 CPU.prototype.read_reg_e16 = function()
 {
     return this.reg16[this.modrm_byte << 1 & 14];
-}
+};
 
 CPU.prototype.write_reg_e16 = function(value)
 {
     this.reg16[this.modrm_byte << 1 & 14] = value;
-}
+};
 
 CPU.prototype.read_reg_e32s = function()
 {
@@ -2989,6 +3613,55 @@ CPU.prototype.write_g32 = function(value)
     this.reg32[this.modrm_byte >> 3 & 7] = value;
 };
 
+CPU.prototype.read_xmm64s = function()
+{
+    return this.create_atom64s(
+        this.reg_xmm32s[(this.modrm_byte >> 3 & 7) << 2],
+        this.reg_xmm32s[(this.modrm_byte >> 3 & 7) << 2 | 1]
+    );
+};
+
+CPU.prototype.read_xmm128s = function()
+{
+    let i = (this.modrm_byte >> 3 & 7) << 2;
+    return this.create_atom128s(
+        this.reg_xmm32s[i | 0],
+        this.reg_xmm32s[i | 1],
+        this.reg_xmm32s[i | 2],
+        this.reg_xmm32s[i | 3]
+    );
+};
+
+CPU.prototype.read_mmx64s = function()
+{
+    return this.create_atom64s(
+        this.reg_mmxs[2 * (this.modrm_byte >> 3 & 7)],
+        this.reg_mmxs[2 * (this.modrm_byte >> 3 & 7) + 1]
+    );
+};
+
+CPU.prototype.write_mmx64s = function(low, high)
+{
+    this.reg_mmxs[2 * (this.modrm_byte >> 3 & 7)] = low;
+    this.reg_mmxs[2 * (this.modrm_byte >> 3 & 7) + 1] = high;
+};
+
+CPU.prototype.write_xmm64 = function(low, high)
+{
+    let i = (this.modrm_byte >> 3 & 7) << 2;
+    this.reg_xmm32s[i] = low;
+    this.reg_xmm32s[i + 1] = high;
+};
+
+CPU.prototype.write_xmm128s = function(d0, d1, d2, d3)
+{
+    let i = (this.modrm_byte >> 3 & 7) << 2;
+    this.reg_xmm32s[i] = d0;
+    this.reg_xmm32s[i + 1] = d1;
+    this.reg_xmm32s[i + 2] = d2;
+    this.reg_xmm32s[i + 3] = d3;
+};
+
 CPU.prototype.pic_call_irq = function(int)
 {
     try
@@ -3006,16 +3679,18 @@ CPU.prototype.handle_irqs = function()
 {
     dbg_assert(!this.page_fault);
 
+    this.diverged();
+
     if((this.flags & flag_interrupt) && !this.page_fault)
     {
         if(this.devices.pic)
         {
-            this.devices.pic.check_irqs();
+            this.devices.pic.acknowledge_irq();
         }
 
         if(this.devices.apic)
         {
-            this.devices.apic.check_irqs();
+            this.devices.apic.acknowledge_irq();
         }
     }
 };
@@ -3028,15 +3703,9 @@ CPU.prototype.device_raise_irq = function(i)
         this.devices.pic.set_irq(i);
     }
 
-    if(this.devices.apic)
+    if(this.devices.ioapic)
     {
-        this.devices.apic.set_irq(i);
-    }
-
-    // XXX: This should be implemented by the devices themselves
-    if(i !== 14 && i !== 15)
-    {
-        this.device_lower_irq(i);
+        this.devices.ioapic.set_irq(i);
     }
 };
 
@@ -3047,9 +3716,9 @@ CPU.prototype.device_lower_irq = function(i)
         this.devices.pic.clear_irq(i);
     }
 
-    if(this.devices.apic)
+    if(this.devices.ioapic)
     {
-        this.devices.apic.clear_irq(i);
+        this.devices.ioapic.clear_irq(i);
     }
 };
 
@@ -3057,8 +3726,15 @@ CPU.prototype.test_privileges_for_io = function(port, size)
 {
     if(this.protected_mode && (this.cpl > this.getiopl() || (this.flags & flag_vm)))
     {
-        var tsr_size = this.segment_limits[reg_tr],
-            tsr_offset = this.segment_offsets[reg_tr];
+        if(!this.tss_size_32)
+        {
+            dbg_log("#GP for port io, 16-bit TSS  port=" + h(port) + " size=" + size, LOG_CPU);
+            CPU_LOG_VERBOSE && this.debug.dump_state();
+            this.trigger_gp(0);
+        }
+
+        var tsr_size = this.segment_limits[reg_tr];
+        var tsr_offset = this.segment_offsets[reg_tr];
 
         if(tsr_size >= 0x67)
         {
@@ -3084,7 +3760,7 @@ CPU.prototype.test_privileges_for_io = function(port, size)
         }
 
         dbg_log("#GP for port io  port=" + h(port) + " size=" + size, LOG_CPU);
-        this.debug.dump_state();
+        CPU_LOG_VERBOSE && this.debug.dump_state();
         this.trigger_gp(0);
     }
 };
@@ -3097,10 +3773,10 @@ CPU.prototype.cpuid = function()
     // http://lxr.linux.no/linux+%2a/arch/x86/include/asm/cpufeature.h
     // http://www.sandpile.org/x86/cpuid.htm
 
-    var eax = 0,
-        ecx = 0,
-        edx = 0,
-        ebx = 0;
+    var eax = 0;
+    var ecx = 0;
+    var edx = 0;
+    var ebx = 0;
 
     var winnt_fix = false;
 
@@ -3128,11 +3804,13 @@ CPU.prototype.cpuid = function()
             ebx = 1 << 16 | 8 << 8; // cpu count, clflush size
             ecx = 1 << 23 | 1 << 30; // popcnt, rdrand
             var vme = 0 << 1;
+            if(VMWARE_HYPERVISOR_PORT) ecx |= 1 << 31; // hypervisor
             edx = (this.fpu ? 1 : 0) |                // fpu
                     vme | 1 << 3 | 1 << 4 | 1 << 5 |   // vme, pse, tsc, msr
-                    1 << 8 | 1 << 11 | 1 << 13 | 1 << 15; // cx8, sep, pge, cmov
+                    1 << 8 | 1 << 11 | 1 << 13 | 1 << 15 | // cx8, sep, pge, cmov
+                    1 << 23 | 1 << 24 | 1 << 25 | 1 << 26;   // mmx, fxsr, sse1, sse2
 
-            if(ENABLE_ACPI)
+            if(ENABLE_ACPI && this.apic_enabled)
             {
                 edx |= 1 << 9; // apic
             }
@@ -3161,7 +3839,7 @@ CPU.prototype.cpuid = function()
                     ebx = 0x01c0003f;
                     ecx = 0x0000003f;
                     edx = 0x00000001;
-                    break
+                    break;
                 case 2:
                     eax = 0x00000143;
                     ebx = 0x05c0003f;
@@ -3171,10 +3849,28 @@ CPU.prototype.cpuid = function()
             }
             break;
 
+        case 5:
+            // from my local machine
+            eax = 0x40;
+            ebx = 0x40;
+            ecx = 3;
+            edx = 0x00142120;
+            break;
+
         case 0x80000000|0:
             // maximum supported extended level
             eax = 5;
             // other registers are reserved
+            break;
+
+        case 0x40000000|0: // hypervisor
+            if(VMWARE_HYPERVISOR_PORT)
+            {
+                // h("Ware".split("").reduce((a, c, i) => a | c.charCodeAt(0) << i * 8, 0))
+                ebx = 0x61774D56|0; // VMwa
+                ecx = 0x4D566572|0; // reVM
+                edx = 0x65726177|0; // ware
+            }
             break;
 
         default:
@@ -3191,44 +3887,25 @@ CPU.prototype.cpuid = function()
 
 CPU.prototype.update_cs_size = function(new_size)
 {
-    this.is_32 = this.operand_size_32 = this.address_size_32 = new_size;
+    dbg_assert(typeof new_size === "boolean");
 
-    this.update_operand_size();
-    this.update_address_size();
-
-    if(OP_TRANSLATION)
+    if(this.is_32 !== new_size)
     {
-        this.translator.clear_cache();
+        this.clear_instruction_cache();
+        this.is_32 = new_size;
+        this.update_operand_size();
     }
 };
 
 CPU.prototype.update_operand_size = function()
 {
-    if(this.operand_size_32)
+    if(this.is_32)
     {
         this.table = this.table32;
     }
     else
     {
         this.table = this.table16;
-    }
-};
-
-CPU.prototype.update_address_size = function()
-{
-    if(this.address_size_32)
-    {
-        this.regv = this.reg32s;
-        this.reg_vcx = reg_ecx;
-        this.reg_vsi = reg_esi;
-        this.reg_vdi = reg_edi;
-    }
-    else
-    {
-        this.regv = this.reg16;
-        this.reg_vcx = reg_cx;
-        this.reg_vsi = reg_si;
-        this.reg_vdi = reg_di;
     }
 };
 
@@ -3287,7 +3964,7 @@ CPU.prototype.lookup_segment_selector = function(selector)
         table_limit = this.segment_limits[reg_ldtr];
     }
 
-    if(selector_offset === 0)
+    if(is_gdt && selector_offset === 0)
     {
         info.is_null = true;
         return info;
@@ -3296,8 +3973,8 @@ CPU.prototype.lookup_segment_selector = function(selector)
     // limit is the number of entries in the table minus one
     if((selector | 7) > table_limit)
     {
-        dbg_log("Selector " + h(selector, 4) + " is outside of the "
-                    + (is_gdt ? "g" : "l") + "dt limits", LOG_CPU)
+        dbg_log("Selector " + h(selector, 4) + " is outside of the " +
+            (is_gdt ? "g" : "l") + "dt limits", LOG_CPU);
         info.is_valid = false;
         return info;
     }
@@ -3433,7 +4110,7 @@ CPU.prototype.switch_seg = function(reg, selector)
         ) {
             dbg_log("#GP for loading invalid in seg " + reg + " sel=" + h(selector, 4), LOG_CPU);
             this.debug.dump_state();
-            this.debug.dump_regs_short();
+            this.debug.dump_regs();
             dbg_trace(LOG_CPU);
             this.trigger_gp(selector & ~3);
         }
@@ -3472,33 +4149,29 @@ CPU.prototype.load_tr = function(selector)
         throw this.debug.unimpl("#GP handler");
     }
 
-    if(!info.is_present)
-    {
-        dbg_log("#GP | present bit not set (ltr)");
-        throw this.debug.unimpl("#GP handler");
-    }
-
     if(!info.is_system)
     {
         dbg_log("#GP | ltr: not a system entry");
-        throw this.debug.unimpl("#GP handler");
+        throw this.debug.unimpl("#GP handler (happens when running kvm-unit-test without ACPI)");
     }
 
     if(info.type !== 9 && info.type !== 1)
     {
         // 0xB: busy 386 TSS (GP)
+        // 0x9: 386 TSS
         // 0x3: busy 286 TSS (GP)
         // 0x1: 286 TSS (??)
         dbg_log("#GP | ltr: invalid type (type = " + h(info.type) + ")");
         throw this.debug.unimpl("#GP handler");
     }
 
-    if(info.type === 1)
+    if(!info.is_present)
     {
-        // 286 tss: Load 16 bit values from tss in call_interrupt_vector
-        throw this.debug.unimpl("286 tss");
+        dbg_log("#NT | present bit not set (ltr)");
+        throw this.debug.unimpl("#NT handler");
     }
 
+    this.tss_size_32 = info.type === 9;
     this.segment_offsets[reg_tr] = info.base;
     this.segment_limits[reg_tr] = info.effective_limit;
     this.sreg[reg_tr] = selector;
@@ -3571,6 +4244,8 @@ CPU.prototype.arpl = function(seg, r16)
 
 CPU.prototype.lar = function(selector, original)
 {
+    dbg_log("lar sel=" + h(selector, 4), LOG_CPU);
+
     /** @const */
     var LAR_INVALID_TYPE = 1 << 0 | 1 << 6 | 1 << 7 | 1 << 8 | 1 << 0xA |
                            1 << 0xD | 1 << 0xE | 1 << 0xF;
@@ -3593,11 +4268,12 @@ CPU.prototype.lar = function(selector, original)
         this.flags |= flag_zero;
         return info.raw1 & 0x00FFFF00;
     }
-
 };
 
 CPU.prototype.lsl = function(selector, original)
 {
+    dbg_log("lsl sel=" + h(selector, 4), LOG_CPU);
+
     /** @const */
     var LSL_INVALID_TYPE = 1 << 0 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 8 |
                            1 << 0xA | 1 << 0xC | 1 << 0xD | 1 << 0xE | 1 << 0xF;
@@ -3656,6 +4332,7 @@ CPU.prototype.verw = function(selector)
     }
     else
     {
+        dbg_log("verw valid", LOG_CPU);
         this.flags |= flag_zero;
     }
 };
@@ -3990,10 +4667,13 @@ CPU.prototype.writable_or_pagefault = function(addr, size)
 
 CPU.prototype.trigger_pagefault = function(write, user, present)
 {
-    //dbg_log("page fault w=" + write + " u=" + user + " p=" + present +
-    //        " eip=" + h(this.previous_ip >>> 0, 8) +
-    //        " cr2=" + h(this.cr[2] >>> 0, 8), LOG_CPU);
-    //dbg_trace(LOG_CPU);
+    if(LOG_PAGE_FAULTS)
+    {
+        dbg_log("page fault w=" + write + " u=" + user + " p=" + present +
+                " eip=" + h(this.previous_ip >>> 0, 8) +
+                " cr2=" + h(this.cr[2] >>> 0, 8), LOG_CPU);
+        dbg_trace(LOG_CPU);
+    }
 
     if(this.page_fault)
     {
@@ -4003,7 +4683,6 @@ CPU.prototype.trigger_pagefault = function(write, user, present)
 
     // invalidate tlb entry
     var page = this.cr[2] >>> 12;
-
     this.tlb_info[page] = 0;
     this.tlb_info_global[page] = 0;
 
@@ -4014,6 +4693,60 @@ CPU.prototype.trigger_pagefault = function(write, user, present)
     throw MAGIC_CPU_EXCEPTION;
 };
 
+CPU.prototype.is_osize_32 = function()
+{
+    return this.is_32 !== ((this.prefixes & PREFIX_MASK_OPSIZE) === PREFIX_MASK_OPSIZE);
+};
+
+CPU.prototype.is_asize_32 = function()
+{
+    return this.is_32 !== ((this.prefixes & PREFIX_MASK_ADDRSIZE) === PREFIX_MASK_ADDRSIZE);
+};
+
+CPU.prototype.get_reg_asize = function(reg)
+{
+    dbg_assert(reg === reg_ecx || reg === reg_esi || reg === reg_edi);
+    var r = this.reg32s[reg];
+
+    if(this.is_asize_32())
+    {
+        return r;
+    }
+    else
+    {
+        return r & 0xFFFF;
+    }
+};
+
+CPU.prototype.set_ecx_asize = function(value)
+{
+    if(this.is_asize_32())
+    {
+        this.reg32s[reg_ecx] = value;
+    }
+    else
+    {
+        this.reg16[reg_cx] = value;
+    }
+};
+
+CPU.prototype.add_reg_asize = function(reg, value)
+{
+    dbg_assert(reg === reg_ecx || reg === reg_esi || reg === reg_edi);
+    if(this.is_asize_32())
+    {
+        this.reg32s[reg] += value;
+    }
+    else
+    {
+        this.reg16[reg << 1] += value;
+    }
+};
+
+CPU.prototype.decr_ecx_asize = function()
+{
+    return this.is_asize_32() ? --this.reg32s[reg_ecx] : --this.reg16[reg_cx];
+};
 
 // Closure Compiler's way of exporting
 if(typeof window !== "undefined")

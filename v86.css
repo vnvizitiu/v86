@@ -1,4 +1,4 @@
-#log, #runtime_infos, #serial, #filesystem_panel {
+#log, #runtime_infos, #serial, #filesystem_panel, #debug_panel {
     font-family: DejaVu Sans Mono, monospace;
     font-size: 13px;
     border: 1px solid #333;
@@ -17,6 +17,10 @@
     height: 100px;
     width: 550px;
 }
+#debug_panel {
+    white-space: pre;
+    float: left;
+}
 #serial {
     margin: 0px;
 }
@@ -32,20 +36,11 @@
     line-height: normal;
 }
 #screen, #vga {
-    border: 1px solid #555;
-    border-width: 2px 1px;
-    display: none;
     -webkit-transform-origin: top left;
     -moz-transform-origin: top left;
+    transform-origin: top left;
 }
 #vga {
-    image-rendering: -moz-crisp-edges;
-    image-rendering: -webkit-optimize-contrast;
-
-    image-rendering: -o-crisp-edges;
-    image-rendering: optimize-contrast;
-    -ms-interpolation-mode: nearest-neighbor;
-
     background-color: #000;
 }
 body {
@@ -64,6 +59,7 @@ a {
     resize: none;
     border: 0;
     padding: 0;
+    position: absolute;
 }
 h4 {
     margin: 0px 0px 20px 0px;
@@ -88,6 +84,8 @@ h4 {
     float: left;
     margin-right: 10px;
     margin-bottom: 10px;
+    border: 1px solid #555;
+    border-width: 2px 1px;
 }
 a img {
     margin: 10px;

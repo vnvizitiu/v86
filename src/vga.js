@@ -18,6 +18,10 @@ var
     MAX_BPP = 32;
 
 /** @const */
+//var VGA_LFB_ADDRESS = 0xFE000000; // set by seabios
+var VGA_LFB_ADDRESS = 0xE0000000;
+
+/** @const */
 var VGA_PLANAR_REAL_BUFFER_START = 4 * VGA_BANK_SIZE;
 
 
@@ -73,6 +77,13 @@ function VGAScreen(cpu, bus, vga_memory_size)
      */
     this.start_address = 0;
 
+    this.crtc = new Uint8Array(0x19);
+
+    /**
+     * @type {number}
+     */
+    this.previous_start_address = 0;
+
     /** @type {boolean} */
     this.graphical_mode_is_linear = true;
 
@@ -119,16 +130,30 @@ function VGAScreen(cpu, bus, vga_memory_size)
     // Experimental, could probably need some changes
     // 01:00.0 VGA compatible controller: NVIDIA Corporation GT216 [GeForce GT 220] (rev a2)
     this.pci_space = [
-        0xde, 0x10, 0x20, 0x0a, 0x07, 0x00, 0x00, 0x00, 0xa2, 0x00, 0x00, 0x03, 0x00, 0x00, 0x80, 0x00,
-        0x08, 0x00, 0x00, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x01, 0x00, 0x00,
+        0xde, 0x10, 0x20, 0x0a, 0x07, 0x00, 0x00, 0x00,  0xa2, 0x00, 0x00, 0x03, 0x00, 0x00, 0x80, 0x00,
+        0x08, VGA_LFB_ADDRESS >>> 8, VGA_LFB_ADDRESS >>> 16, VGA_LFB_ADDRESS >>> 24,
+                                0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x00, 0x0a, 0x01, 0x00, 0x00,
     ];
     this.pci_id = 0x12 << 3;
-    this.pci_bars = [];
-    this.name = "vga";
+    this.pci_bars = [
+        {
+            size: vga_memory_size,
+        },
+    ];
 
-    cpu.devices.pci.register_device(this);
+    // TODO: Should be matched with vga bios size and mapping address
+    // Seabios config for this device:
+    // CONFIG_VGA_PCI=y
+    // CONFIG_OVERRIDE_PCI_ID=y
+    // CONFIG_VGA_VID=0x10de
+    // CONFIG_VGA_DID=0x0a20
+
+    this.pci_rom_size = 0x10000;
+    this.pci_rom_address = 0xFEB00000;
+
+    this.name = "vga";
 
     this.stats = {
         is_graphical: false,
@@ -195,6 +220,9 @@ function VGAScreen(cpu, bus, vga_memory_size)
     io.register_write_consecutive(0x3D4, this, this.port3D4_write, this.port3D5_write);
     io.register_read(0x3D5, this, this.port3D5_read);
 
+    io.register_read(0x3D4, this, function() { dbg_log("3D4 read", LOG_VGA); return 0; });
+    io.register_read(0x3CA, this, function() { dbg_log("3CA read", LOG_VGA); return 0; });
+
     io.register_read(0x3DA, this, this.port3DA_read);
 
 
@@ -251,13 +279,15 @@ function VGAScreen(cpu, bus, vga_memory_size)
         function(addr) { return me.vga_memory_read(addr); },
         function(addr, value) { me.vga_memory_write(addr, value); }
     );
-    io.mmap_register(0xE0000000, this.vga_memory_size,
+    io.mmap_register(VGA_LFB_ADDRESS, this.vga_memory_size,
         function(addr) { return me.svga_memory_read8(addr); },
         function(addr, value) { me.svga_memory_write8(addr, value); },
         function(addr) { return me.svga_memory_read32(addr); },
         function(addr, value) { me.svga_memory_write32(addr, value); }
     );
-};
+
+    cpu.devices.pci.register_device(this);
+}
 
 VGAScreen.prototype.get_state = function()
 {
@@ -298,7 +328,7 @@ VGAScreen.prototype.get_state = function()
     state[32] = this.planar_rotate_reg;
     state[33] = this.planar_bitmap;
     state[34] = this.max_scan_line;
-    state[35] = this.miscellaneous_output_register;;
+    state[35] = this.miscellaneous_output_register;
     state[36] = this.port_3DA_value;
     state[37] = this.dispi_index;
     state[38] = this.dispi_enable_value;
@@ -633,6 +663,7 @@ VGAScreen.prototype.vga_memory_write_text_mode = function(addr, value)
         chr,
         color;
 
+    // XXX: Should handle 16 bit write if possible
     if(addr & 1)
     {
         color = value;
@@ -761,6 +792,9 @@ VGAScreen.prototype.set_video_mode = function(mode)
 
     switch(mode)
     {
+        case 0x66:
+            this.set_size_text(110, 46);
+            break;
         case 0x03:
             this.set_size_text(this.text_mode_width, 25);
             break;
@@ -883,6 +917,8 @@ VGAScreen.prototype.port3C5_write = function(value)
 
 VGAScreen.prototype.port3C5_read = function()
 {
+    dbg_log("3C5 / sequencer read " + h(this.sequencer_index), LOG_VGA);
+
     switch(this.sequencer_index)
     {
         case 0x02:
@@ -892,7 +928,6 @@ VGAScreen.prototype.port3C5_read = function()
         case 0x06:
             return 0x12;
         default:
-            dbg_log("3C5 / sequencer read " + h(this.sequencer_index), LOG_VGA);
     }
     return 0;
 };
@@ -940,16 +975,19 @@ VGAScreen.prototype.port3C9_write = function(color_byte)
 
 VGAScreen.prototype.port3C9_read = function()
 {
+    dbg_log("3C9 read", LOG_VGA);
+
     var index = this.dac_color_index_read / 3 | 0;
     var offset = this.dac_color_index_read % 3;
     var color = this.vga256_palette[index];
 
     this.dac_color_index_read++;
     return (color >> (2 - offset) * 8 & 0xFF) / 255 * 63 | 0;
-}
+};
 
 VGAScreen.prototype.port3CC_read = function()
 {
+    dbg_log("3CC read", LOG_VGA);
     return this.miscellaneous_output_register;
 };
 
@@ -982,19 +1020,21 @@ VGAScreen.prototype.port3CF_write = function(value)
             break;
         case 5:
             this.planar_mode = value;
-            //dbg_log("planar mode: " + h(value), LOG_VGA);
+            dbg_log("planar mode: " + h(value), LOG_VGA);
             break;
         case 8:
             this.planar_bitmap = value;
-            //dbg_log("planar bitmap: " + h(value), LOG_VGA);
+            dbg_log("planar bitmap: " + h(value), LOG_VGA);
             break;
         default:
-            //dbg_log("3CF / graphics write " + h(this.graphics_index) + ": " + h(value), LOG_VGA);
+            dbg_log("3CF / graphics write " + h(this.graphics_index) + ": " + h(value), LOG_VGA);
     }
 };
 
 VGAScreen.prototype.port3CF_read = function()
 {
+    dbg_log("3CF / graphics read " + h(this.graphics_index), LOG_VGA);
+
     switch(this.graphics_index)
     {
         case 3:
@@ -1006,7 +1046,6 @@ VGAScreen.prototype.port3CF_read = function()
         case 8:
             return this.planar_bitmap;
         default:
-            dbg_log("3CF / graphics read " + h(this.graphics_index), LOG_VGA);
     }
     return 0;
 };
@@ -1043,12 +1082,24 @@ VGAScreen.prototype.port3D5_write = function(value)
             this.update_cursor_scanline();
             break;
         case 0xC:
+            this.previous_start_address = this.start_address;
             this.start_address = this.start_address & 0xff | value << 8;
             this.complete_redraw();
             break;
         case 0xD:
             this.start_address = this.start_address & 0xff00 | value;
-            this.complete_redraw();
+            var delta = this.start_address - this.previous_start_address;
+            if(delta)
+            {
+                //if(!this.graphical_mode && delta % this.text_mode_width === 0)
+                //{
+                //    this.bus.send("screen-text-scroll", delta / this.text_mode_width);
+                //}
+                //else
+                {
+                    this.complete_redraw();
+                }
+            }
             dbg_log("start addr: " + h(this.start_address, 4), LOG_VGA);
             break;
         case 0xE:
@@ -1063,6 +1114,10 @@ VGAScreen.prototype.port3D5_write = function(value)
             this.offset_register = value;
             break;
         default:
+            if(this.index_crtc < this.crtc.length)
+            {
+                this.crtc[this.index_crtc] = value;
+            }
             dbg_log("3D5 / CRTC write " + h(this.index_crtc) + ": " + h(value), LOG_VGA);
     }
 
@@ -1070,6 +1125,8 @@ VGAScreen.prototype.port3D5_write = function(value)
 
 VGAScreen.prototype.port3D5_read = function()
 {
+    dbg_log("3D5 read " + h(this.index_crtc), LOG_VGA);
+
     switch(this.index_crtc)
     {
         case 0x9:
@@ -1086,19 +1143,31 @@ VGAScreen.prototype.port3D5_read = function()
             return this.cursor_address >> 8;
         case 0xF:
             return this.cursor_address & 0xFF;
+        case 0x1:
+            return 80; // cols
+        case 0x12:
+            return 50; // rows
         case 0x13:
             return this.offset_register;
     }
 
-    dbg_log("3D5 read " + h(this.index_crtc), LOG_VGA);
-    return 0;
+    if(this.index_crtc < this.crtc.length)
+    {
+        return this.crtc[this.index_crtc];
+    }
+    else
+    {
+        return 0;
+    }
 };
 
 VGAScreen.prototype.port3DA_read = function()
 {
+    dbg_log("3DA read", LOG_VGA);
+
     // status register
     this.port_3DA_value ^= 8;
-    this.attribute_controller_index = -1
+    this.attribute_controller_index = -1;
     return this.port_3DA_value;
 };
 
@@ -1107,7 +1176,11 @@ VGAScreen.prototype.switch_video_mode = function(mar)
     // Cheap way to figure this out, using the Miscellaneous Output Register
     // See: http://wiki.osdev.org/VGA_Hardware#List_of_register_settings
 
-    if(mar === 0x67)
+    if(mar === 0x66)
+    {
+        this.set_video_mode(0x66);
+    }
+    else if(mar === 0x67)
     {
         this.set_video_mode(0x3);
     }
@@ -1247,6 +1320,8 @@ VGAScreen.prototype.svga_register_read = function(n)
             {
                 return 1; // seabios/windows98 divide exception
             }
+            break;
+
         case 8:
             // x offset
             return 0;

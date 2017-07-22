@@ -22,11 +22,6 @@ var root_path = __dirname + "/../..";
 
 var SCREEN_WIDTH = 80;
 
-function readfile(path)
-{
-    return new Uint8Array(fs.readFileSync(path)).buffer;
-}
-
 function get_line(screen, y)
 {
     return screen.subarray(y * SCREEN_WIDTH, (y + 1) * SCREEN_WIDTH);
@@ -63,6 +58,18 @@ function screen_to_text(s)
     return result.join("\n");
 }
 
+function send_work_to_worker(worker, message)
+{
+    if(current_test < tests.length)
+    {
+        worker.send(tests[current_test]);
+        current_test++;
+    }
+    else
+    {
+        worker.disconnect();
+    }
+}
 
 if(cluster.isMaster)
 {
@@ -128,14 +135,14 @@ if(cluster.isMaster)
             expect_mouse_registered: true,
             skip_if_disk_image_missing: true,
         },
-        {
-            name: "Oberon",
-            hda: root_path + "/images/oberon.dsk",
-            fda: root_path + "/images/oberon-boot.dsk",
-            timeout: 20,
-            expect_graphical_mode: true,
-            expect_mouse_registered: true,
-        },
+        //{
+        //    name: "Oberon",
+        //    hda: root_path + "/images/oberon.dsk",
+        //    fda: root_path + "/images/oberon-boot.dsk",
+        //    timeout: 30,
+        //    expect_graphical_mode: true,
+        //    expect_mouse_registered: true,
+        //},
         {
             name: "Linux 3",
             cdrom: root_path + "/images/linux3.iso",
@@ -191,25 +198,12 @@ if(cluster.isMaster)
 
     var current_test = 0;
 
-    function send_work_to_worker(worker, message)
-    {
-        if(current_test < tests.length)
-        {
-            worker.send(tests[current_test]);
-            current_test++;
-        }
-        else
-        {
-            worker.disconnect();
-        }
-    }
-
     for(var i = 0; i < nr_of_cpus; i++)
     {
         var worker = cluster.fork();
 
-        worker.on("message", send_work_to_worker.bind(this, worker));
-        worker.on("online", send_work_to_worker.bind(this, worker));
+        worker.on("message", send_work_to_worker.bind(null, worker));
+        worker.on("online", send_work_to_worker.bind(null, worker));
 
         worker.on("exit", function(code, signal)
         {
@@ -243,7 +237,7 @@ function bytearray_starts_with(arr, search)
     {
         if(arr[i] !== search[i])
         {
-            return false
+            return false;
         }
     }
     return true;
@@ -253,50 +247,14 @@ function run_test(test, done)
 {
     console.log("Starting test: %s", test.name);
 
-    if(test.alternative_bios)
-    {
-        var bios = readfile(root_path + "/bios/bochs-bios.bin");
-        var vga_bios = readfile(root_path + "/bios/bochs-vgabios.bin");
-    }
-    else
-    {
-        var bios = readfile(root_path + "/bios/seabios.bin");
-        var vga_bios = readfile(root_path + "/bios/vgabios.bin");
-    }
+    let image = test.fda || test.hda || test.cdrom;
+    console.assert(image, "Bootable drive expected");
 
-    var settings = {
-        bios: { buffer: bios },
-        vga_bios: { buffer: vga_bios },
-        autostart: true,
-    };
-
-    console.assert(test.cdrom || test.fda || test.hda, "Bootable drive expected");
-
-    try
+    if(!fs.existsSync(image))
     {
-        if(test.cdrom)
-        {
-            settings.cdrom = { buffer: readfile(test.cdrom) };
-        }
-        if(test.fda)
-        {
-            settings.fda = { buffer: readfile(test.fda) };
-        }
-        if(test.hda)
-        {
-            settings.hda = { buffer: readfile(test.hda) };
-        }
-    }
-    catch(e)
-    {
-        if(e.code !== "ENOENT")
-        {
-            throw e;
-        }
-
         if(test.skip_if_disk_image_missing)
         {
-            console.warn("Missing disk image: " + e.path + ", test skipped");
+            console.warn("Missing disk image: " + image + ", test skipped");
             console.warn();
 
             done();
@@ -304,9 +262,40 @@ function run_test(test, done)
         }
         else
         {
-            console.warn("Missing disk image: " + e.path);
+            console.warn("Missing disk image: " + image);
             process.exit(1);
         }
+    }
+
+
+    if(test.alternative_bios)
+    {
+        var bios = root_path + "/bios/bochs-bios.bin";
+        var vga_bios = root_path + "/bios/bochs-vgabios.bin";
+    }
+    else
+    {
+        var bios = root_path + "/bios/seabios.bin";
+        var vga_bios = root_path + "/bios/vgabios.bin";
+    }
+
+    var settings = {
+        bios: { url: bios },
+        vga_bios: { url: vga_bios },
+        autostart: true,
+    };
+
+    if(test.cdrom)
+    {
+        settings.cdrom = { url: test.cdrom };
+    }
+    if(test.fda)
+    {
+        settings.fda = { url: test.fda };
+    }
+    if(test.hda)
+    {
+        settings.hda = { url: test.hda };
     }
 
     if(test.expected_texts)

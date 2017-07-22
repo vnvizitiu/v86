@@ -1,16 +1,6 @@
-/** @define {boolean} */
-var DEBUG = true;
-
-
-/** @const */
-var LOG_TO_FILE = false;
-
-/** @const */
-var LOG_ALL_IO = false;
-
+"use strict";
 
 var
-
 /** @const */ LOG_ALL = -1,
 /** @const */ LOG_NONE = 0,
 
@@ -27,7 +17,7 @@ var
 /** @const */ LOG_MOUSE =  0x000400,
 /** @const */ LOG_PCI =    0x000800,
 /** @const */ LOG_BIOS =   0x001000,
-/** @const */ LOG_CD =     0x002000,
+/** @const */ LOG_FLOPPY = 0x002000,
 /** @const */ LOG_SERIAL = 0x004000,
 /** @const */ LOG_DISK =   0x008000,
 /** @const */ LOG_RTC =    0x010000,
@@ -36,14 +26,7 @@ var
 /** @const */ LOG_APIC =   0x080000,
 /** @const */ LOG_NET =    0x100000,
 /** @const */ LOG_VIRTIO = 0x200000,
-/** @const */ LOG_9P =     0x400000,
-
-
-
-    //LOG_LEVEL = LOG_ALL & ~LOG_DMA & ~LOG_DISK & ~LOG_PIT;
-    LOG_LEVEL = LOG_CPU | LOG_OTHER | LOG_IO;
-    //LOG_LEVEL = LOG_CPU | LOG_OTHER | LOG_DISK | LOG_IO | LOG_CD;
-    //LOG_LEVEL = 0;
+/** @const */ LOG_9P =     0x400000;
 
 
 /**
@@ -65,7 +48,7 @@ var LOG_NAMES = [
     [LOG_MOUSE, "MOUS"],
     [LOG_PCI, "PCI"],
     [LOG_BIOS, "BIOS"],
-    [LOG_CD, "CD"],
+    [LOG_FLOPPY, "FLOP"],
     [LOG_SERIAL, "SERI"],
     [LOG_RTC, "RTC"],
     [LOG_HPET, "HPET"],
@@ -84,14 +67,6 @@ var
 
 
 var
-    /** @const */
-    ENABLE_HPET = !DEBUG && false,
-
-    /** @const */
-    ENABLE_ACPI = !DEBUG && false;
-
-var
-
 
 // flags register bitflags
 /** @const */ flag_carry = 1,
@@ -186,16 +161,7 @@ PSE_ENABLED = 128,
 
 
 /** @const */ reg_tr = 6, // task register
-/** @const */ reg_ldtr = 7, // local descriptor table register
-
-
-
-/** @const */ LOOP_COUNTER = 11001,
-/** @const */ TIME_PER_FRAME = 8;
-
-/** @const */
-var OP_TRANSLATION = false;
-
+/** @const */ reg_ldtr = 7; // local descriptor table register
 
 var
     /**
@@ -204,7 +170,6 @@ var
      *
      * @const
      */
-
     MMAP_BLOCK_BITS = 17,
     /** @const */
     MMAP_BLOCK_SIZE = 1 << MMAP_BLOCK_BITS;
@@ -256,9 +221,15 @@ var
     /** @const */
     CR4_PSE = 1 << 4,
     /** @const */
+    CR4_DE = 1 << 3,
+    /** @const */
     CR4_PAE = 1 << 5,
     /** @const */
-    CR4_PGE = 1 << 7;
+    CR4_PGE = 1 << 7,
+    /** @const */
+    CR4_OSFXSR = 1 << 9,
+    /** @const */
+    CR4_OSXMMEXCPT = 1 << 10;
 
 
 // Segment prefixes must not collide with reg_*s variables
@@ -268,7 +239,7 @@ var
     SEG_PREFIX_NONE = -1,
 
     /** @const */
-    SEG_PREFIX_ZERO = 9;
+    SEG_PREFIX_ZERO = 7;
 
 
 var
@@ -289,6 +260,9 @@ var IA32_TIME_STAMP_COUNTER = 0x10;
 var IA32_PLATFORM_ID = 0x17;
 
 /** @const */
+var MSR_EBC_FREQUENCY_ID = 0x2C;
+
+/** @const */
 var IA32_APIC_BASE_MSR = 0x1B;
 
 /** @const */
@@ -307,13 +281,18 @@ var MSR_SMI_COUNT = 0x34;
 var IA32_MCG_CAP = 0x179;
 
 /** @const */
+var IA32_KERNEL_GS_BASE = 0xC0000101 | 0;
+
+/** @const */
 var MSR_PKG_C2_RESIDENCY = 0x60D;
 
 
-
 /** @const */
-var TSC_RATE = 8 * 1024;
-
+var IA32_APIC_BASE_BSP = 1 << 8;
+/** @const */
+var IA32_APIC_BASE_EXTD = 1 << 10;
+/** @const */
+var IA32_APIC_BASE_EN = 1 << 11;
 
 
 /** @const */ var TSR_BACKLINK = 0x00;
@@ -339,3 +318,32 @@ var TSC_RATE = 8 * 1024;
 /** @const */ var TSR_LDT = 0x60;
 
 
+/** @const */ var FW_CFG_SIGNATURE = 0x00;
+/** @const */ var FW_CFG_RAM_SIZE = 0x03;
+/** @const */ var FW_CFG_NB_CPUS = 0x05;
+
+
+/** @const */
+var PREFIX_MASK_REP = 0b11000;
+/** @const */
+var PREFIX_REPZ = 0b01000;
+/** @const */
+var PREFIX_REPNZ = 0b10000;
+
+/** @const */
+var PREFIX_MASK_SEGMENT = 0b111;
+
+/** @const */
+var PREFIX_MASK_OPSIZE = 0b100000;
+/** @const */
+var PREFIX_MASK_ADDRSIZE = 0b1000000;
+
+/** @const */
+var PREFIX_F2 = PREFIX_REPNZ; // alias
+/** @const */
+var PREFIX_F3 = PREFIX_REPZ; // alias
+/** @const */
+var PREFIX_66 = PREFIX_MASK_OPSIZE; // alias
+
+/** @const */
+var MXCSR_MASK = (0xFFFF & ~(1 << 6));

@@ -214,7 +214,7 @@ function ScreenAdapter(screen_container, bus)
         requestAnimationFrame(is_graphical ? update_graphical : update_text);
     };
 
-    function update_text()
+    var update_text = function()
     {
         for(var i = 0; i < text_mode_height; i++)
         {
@@ -226,16 +226,13 @@ function ScreenAdapter(screen_container, bus)
         }
 
         this.timer();
-    }
-    update_text = update_text.bind(this);
+    }.bind(this);
 
-    function update_graphical()
+    var update_graphical = function()
     {
         this.bus.send("screen-fill-buffer");
-
         this.timer();
-    }
-    update_graphical = update_graphical.bind(this);
+    }.bind(this);
 
     this.destroy = function()
     {
@@ -294,6 +291,8 @@ function ScreenAdapter(screen_container, bus)
         {
             this.text_update_row(i);
         }
+
+        update_scale_text();
     };
 
     this.set_size_graphical = function(width, height)
@@ -317,6 +316,7 @@ function ScreenAdapter(screen_container, bus)
         graphical_mode_height = height;
 
         this.bus.send("screen-tell-buffer", [graphic_buffer32], [graphic_buffer32.buffer]);
+        update_scale_graphic();
     };
 
     this.set_scale = function(s_x, s_y)
@@ -324,19 +324,77 @@ function ScreenAdapter(screen_container, bus)
         scale_x = s_x;
         scale_y = s_y;
 
-        elem_set_scale(graphic_screen, scale_x, scale_y);
-        elem_set_scale(text_screen, scale_x, scale_y);
+        update_scale_text();
+        update_scale_graphic();
     };
     this.set_scale(scale_x, scale_y);
 
-    function elem_set_scale(elem, scale_x, scale_y)
+    function update_scale_text()
     {
-        var scale_str = "";
+        elem_set_scale(text_screen, scale_x, scale_y, true);
+    }
 
-        scale_str += scale_x === 1 ? "" : " scaleX(" + scale_x + ")";
-        scale_str += scale_y === 1 ? "" : " scaleY(" + scale_y + ")";
+    function update_scale_graphic()
+    {
+        elem_set_scale(graphic_screen, scale_x, scale_y, false);
+    }
 
-        elem.style.webkitTransform = elem.style.MozTransform = scale_str;
+    function elem_set_scale(elem, scale_x, scale_y, use_scale)
+    {
+        elem.style.width = "";
+        elem.style.height = "";
+
+        if(use_scale)
+        {
+            elem.style.transform = elem.style.webkitTransform = elem.style.MozTransform = "";
+        }
+
+        var rectangle = elem.getBoundingClientRect();
+
+        if(use_scale)
+        {
+            var scale_str = "";
+
+            scale_str += scale_x === 1 ? "" : " scaleX(" + scale_x + ")";
+            scale_str += scale_y === 1 ? "" : " scaleY(" + scale_y + ")";
+
+            elem.style.transform = elem.style.webkitTransform = elem.style.MozTransform = scale_str;
+        }
+        else
+        {
+            // unblur non-fractional scales
+            if(scale_x % 1 === 0 && scale_y % 1 === 0)
+            {
+                graphic_screen.style.imageRendering = "-moz-crisp-edges";
+                graphic_screen.style.imageRendering = "moz-crisp-edges";
+                graphic_screen.style.imageRendering = "webkit-optimize-contrast";
+                graphic_screen.style.imageRendering = "o-crisp-edges";
+                graphic_screen.style.imageRendering = "pixelated";
+                graphic_screen.style["-ms-interpolation-mode"] = "nearest-neighbor";
+            }
+            else
+            {
+                graphic_screen.style.imageRendering = "";
+                graphic_screen.style["-ms-interpolation-mode"] = "";
+            }
+
+            // undo fractional css-to-device pixel ratios
+            var device_pixel_ratio = window.devicePixelRatio || 1;
+            if(device_pixel_ratio % 1 !== 0)
+            {
+                scale_x /= device_pixel_ratio;
+                scale_y /= device_pixel_ratio;
+            }
+        }
+
+        if(scale_x !== 1)
+        {
+            elem.style.width = rectangle.width * scale_x + "px";
+        }
+        if(scale_y !== 1)
+        {
+            elem.style.height = rectangle.height * scale_y + "px";
+        }
     }
 
     this.update_cursor_scanline = function(start, end)
@@ -393,9 +451,9 @@ function ScreenAdapter(screen_container, bus)
             text = "";
 
             // put characters of the same color in one element
-            while(i < text_mode_width
-                    && text_mode_data[offset + 1] === bg_color
-                    && text_mode_data[offset + 2] === fg_color)
+            while(i < text_mode_width &&
+                text_mode_data[offset + 1] === bg_color &&
+                text_mode_data[offset + 2] === fg_color)
             {
                 var ascii = text_mode_data[offset];
 

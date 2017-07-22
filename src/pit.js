@@ -89,9 +89,9 @@ PIT.prototype.timer = function(now, no_irq)
     var time_to_next_interrupt = 100;
 
     // counter 0 produces interrupts
-    if(!no_irq && this.counter_enabled[0])
+    if(!no_irq)
     {
-        if(this.did_rollover(0, now))
+        if(this.counter_enabled[0] && this.did_rollover(0, now))
         {
             time_to_next_interrupt = 0;
 
@@ -107,6 +107,10 @@ PIT.prototype.timer = function(now, no_irq)
             {
                 this.counter_enabled[0] = 0;
             }
+        }
+        else
+        {
+            this.cpu.device_lower_irq(0);
         }
     }
     time_to_next_interrupt = 0;
@@ -282,6 +286,10 @@ PIT.prototype.port43_write = function(reg_byte)
         this.counter_next_low[i] = 1;
     }
 
+    if(i === 0)
+    {
+        this.cpu.device_lower_irq(0);
+    }
 
     if(mode === 0)
     {

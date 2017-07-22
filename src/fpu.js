@@ -274,7 +274,7 @@ FPU.prototype.load_status_word = function()
     return this.status_word & ~(7 << 11) | this.stack_ptr << 11;
 }
 
-FPU.prototype.safe_status_word = function(sw)
+FPU.prototype.set_status_word = function(sw)
 {
     this.status_word = sw & ~(7 << 11);
     this.stack_ptr = sw >> 11 & 7;
@@ -308,7 +308,7 @@ FPU.prototype.load_tag_word = function()
     return tag_word;
 }
 
-FPU.prototype.safe_tag_word = function(tag_word)
+FPU.prototype.set_tag_word = function(tag_word)
 {
     this.stack_empty = 0;
 
@@ -317,12 +317,12 @@ FPU.prototype.safe_tag_word = function(tag_word)
         this.stack_empty |= (tag_word >> i) & (tag_word >> i + 1) & 1 << i;
     }
 
-    //dbg_log("safe  tw=" + h(tag_word) + " se=" + h(this.stack_empty), LOG_FPU);
+    //dbg_log("set_tag_word  tw=" + h(tag_word) + " se=" + h(this.stack_empty), LOG_FPU);
 }
 
 FPU.prototype.fstenv = function(addr)
 {
-    if(this.cpu.operand_size_32)
+    if(this.cpu.is_osize_32())
     {
         this.cpu.writable_or_pagefault(addr, 26);
 
@@ -345,12 +345,12 @@ FPU.prototype.fstenv = function(addr)
 
 FPU.prototype.fldenv = function(addr)
 {
-    if(this.cpu.operand_size_32)
+    if(this.cpu.is_osize_32())
     {
         this.control_word = this.cpu.safe_read16(addr);
 
-        this.safe_status_word(this.cpu.safe_read16(addr + 4));
-        this.safe_tag_word(this.cpu.safe_read16(addr + 8));
+        this.set_status_word(this.cpu.safe_read16(addr + 4));
+        this.set_tag_word(this.cpu.safe_read16(addr + 8));
 
         this.fpu_ip = this.cpu.safe_read32s(addr + 12);
         this.fpu_ip_selector = this.cpu.safe_read16(addr + 16);
@@ -373,11 +373,11 @@ FPU.prototype.fsave = function(addr)
 
     for(var i = 0; i < 8; i++)
     {
-        this.store_m80(addr, i - this.stack_ptr & 7);
+        this.store_m80(addr, this.st[this.stack_ptr + i & 7]);
         addr += 10;
     }
 
-    //dbg_log("save " + [].slice.call(this.st), LOG_FPU);
+    //dbg_log("save st=" + this.stack_ptr + " " + [].slice.call(this.st), LOG_FPU);
 
     this.finit();
 }
@@ -389,11 +389,11 @@ FPU.prototype.frstor = function(addr)
 
     for(var i = 0; i < 8; i++)
     {
-        this.st[i] = this.load_m80(addr);
+        this.st[(i + this.stack_ptr) & 7] = this.load_m80(addr);
         addr += 10;
     }
 
-    //dbg_log("rstor " + [].slice.call(this.st), LOG_FPU);
+    //dbg_log("rstor st=" + this.stack_ptr + " " + [].slice.call(this.st), LOG_FPU);
 }
 
 FPU.prototype.fxtract = function()
@@ -554,9 +554,9 @@ FPU.prototype.load_m80 = function(addr)
     return mantissa * Math.pow(2, exponent - 63);
 }
 
-FPU.prototype.store_m80 = function(addr, i)
+FPU.prototype.store_m80 = function(addr, n)
 {
-    this.float64[0] = this.st[this.stack_ptr + i & 7];
+    this.float64[0] = n;
 
     var sign = this.float64_byte[7] & 0x80,
         exponent = (this.float64_byte[7] & 0x7f) << 4 | this.float64_byte[6] >> 4,
@@ -875,7 +875,22 @@ FPU.prototype.op_D9_reg = function(imm8)
             {
                 case 0:
                     // fprem
-                    this.st[this.stack_ptr] = st0 % this.get_sti(1);
+                    var st1 = this.get_sti(1);
+                    var fprem_quotient = Math.trunc(st0 / st1);
+                    this.st[this.stack_ptr] = st0 % st1;
+
+                    this.status_word &= ~(FPU_C0 | FPU_C1 | FPU_C3);
+                    if (fprem_quotient & 1) {
+                        this.status_word |= FPU_C1;
+                    }
+                    if (fprem_quotient & (1 << 1)) {
+                        this.status_word |= FPU_C3;
+                    }
+                    if (fprem_quotient & (1 << 2)) {
+                        this.status_word |= FPU_C0;
+                    }
+
+                    this.status_word &= ~FPU_C2;
                     break;
                 case 1:
                     // fyl2xp1: y * log2(x+1) and pop
@@ -1194,7 +1209,7 @@ FPU.prototype.op_DB_mem = function(imm8, addr)
         case 7:
             // fstp
             this.cpu.writable_or_pagefault(addr, 10);
-            this.store_m80(addr, 0);
+            this.store_m80(addr, this.get_st0());
             this.pop();
             break;
         default:

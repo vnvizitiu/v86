@@ -85,7 +85,7 @@ A testsuite is available in `tests/full/`. Run it using `node tests/full/run.js`
 How to build, run and embed?
 -
 
-- Building is only necessay for releases, open debug.html and everything should load out of the box
+- Building is only necessary for releases, open debug.html and everything should load out of the box
 - If you want a compressed and fast (i.e. with debug code removed) version, you
   need Closure Compiler. Download it as shown below and run `make build/v86_all.js`.
 - ROM and disk images are loaded via XHR, so if you want to try out `index.html`
@@ -101,16 +101,14 @@ How to build, run and embed?
 
 ```bash
 # grab the main repo
-git clone https://github.com/copy/v86.git
-
-cd v86
+git clone https://github.com/copy/v86.git && cd v86
 
 # grab the disk images
 wget -P images/ https://copy.sh/v86/images/{linux.iso,linux3.iso,kolibri.img,windows101.img,os8.dsk,freedos722.img,openbsd.img}
 
 # grab closure compiler
 wget -P closure-compiler https://dl.google.com/closure-compiler/compiler-latest.zip
-unzip -d closure-compiler closure-compiler/compiler-latest.zip compiler.jar
+unzip -d closure-compiler closure-compiler/compiler-latest.zip *.jar
 
 # build the library
 make build/libv86.js
@@ -119,17 +117,6 @@ make build/libv86.js
 ./tests/full/run.js
 ```
 
-Why?
--
-
-Similar projects have been done before, but I decided to work on this as a fun
-project and learn something about the x86 architecture. It has grown pretty
-advanced and I got Linux and KolibriOS working, so there might be some actual
-uses.
-
-If you build something interesting, let me know.
-
-
 Compatibility
 -
 
@@ -137,17 +124,19 @@ Here's an overview of the operating systems supported in v86:
 
 - Linux works pretty well. Graphical boot fails in many versions, but you
   mostly get a shell. The mouse is often not detected automatically.
-  - Damn Small Linux (2.4 Kernel): Run with `lowram` and choose PS2 mouse in
-    xsetup. Takes circa 10 minutes to boot.
+  - Damn Small Linux (2.4 Kernel): Works, takes circa 10 minutes to boot.
   - Tinycore (3.0 kernel): `udev` and `X` fail, but you get a
     terminal.
   - Nanolinux works.
-  - Archlinux works. Add `atkbd` to `MODULES` in `/etc/mkinitcpio.conf`.
-- FreeDOS and Windows 1.01 run very well.
+  - Archlinux works with some caveats. See [archlinux.md](docs/archlinux.md).
+- ReactOS works
+- FreeDOS, Windows 1.01 and MS-DOS run very well.
 - KolibriOS works. A few applications need SSE.
-- Haiku boots, but takes very long (around 30 minutes). Set the memory size to 128MB.
-- ReactOS doesn't work.
+- Haiku boots, but takes very long (around 30 minutes).
 - No Android version seems to work, you still get a shell.
+- Windows 1, 95 and 98 work. Other versions currently don't.
+- Many hobby operating systems work.
+- FreeBSD works
 
 You can get some infos on the disk images here: https://github.com/copy/images.
 
@@ -169,9 +158,11 @@ Simplified BSD License, see [LICENSE](LICENSE), unless otherwise noted.
 Credits
 -
 
-- Test cases via QEMU, http://wiki.qemu.org/Main_Page
+- CPU test cases via QEMU, http://wiki.qemu.org/Main_Page
+- More tests via [kvm-unit-tests](https://www.linux-kvm.org/page/KVM-unit-tests)
 - [Disk Images](https://github.com/copy/images)
-- [The jor1k project](https://github.com/s-macke/jor1k) for 9p and filesystem drivers
+- [The jor1k project](https://github.com/s-macke/jor1k) for 9p, filesystem and uart drivers
+- [WinWorld](https://winworldpc.com/) sources of some old operating systems
 
 
 More questions?

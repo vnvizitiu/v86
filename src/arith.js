@@ -43,7 +43,7 @@ CPU.prototype.sbb32 = function(dest, src) { return this.sbb(dest, src, OPSIZE_32
 
 CPU.prototype.add = function(dest_operand, source_operand, op_size)
 {
-    //if(this.safe_read32s(this.instruction_pointer + 1) === 0) throw "0000000";
+    //if(this.safe_read32s(this.instruction_pointer + 1) === 0 && this.safe_read32s(this.instruction_pointer + 5) === 0) throw "0000000";
 
     this.last_op1 = dest_operand;
     this.last_op2 = source_operand;
@@ -698,7 +698,7 @@ CPU.prototype.bcd_das = function()
     {
         this.reg8[reg_al] -= 6;
         this.flags |= flag_adjust;
-        this.flags = this.flags & ~1 | old_cf | this.reg8[reg_al] >> 7;
+        this.flags = this.flags & ~1 | old_cf | (old_al < 6);
     }
     else
     {
@@ -1336,7 +1336,15 @@ CPU.prototype.shld32 = function(dest_operand, source_operand, count)
     this.last_op_size = OPSIZE_32;
     this.flags_changed = flags_all & ~1 & ~flag_overflow;
     this.flags = (this.flags & ~1) | (dest_operand >>> (32 - count) & 1);
-    this.flags = (this.flags & ~flag_overflow) | ((this.flags & 1) ^ (this.last_result >> 31 & 1)) << 11;
+
+    if(count === 1)
+    {
+        this.flags = (this.flags & ~flag_overflow) | ((this.flags & 1) ^ (this.last_result >> 31 & 1)) << 11;
+    }
+    else
+    {
+        this.flags &= ~flag_overflow;
+    }
 
     return this.last_result;
 }
@@ -1374,7 +1382,6 @@ CPU.prototype.btr_reg = function(bit_base, bit_offset)
 
 CPU.prototype.bt_mem = function(virt_addr, bit_offset)
 {
-    dbg_assert(bit_offset >= 0);
     var bit_base = this.safe_read8(virt_addr + (bit_offset >> 3) | 0);
     bit_offset &= 7;
 
@@ -1384,7 +1391,6 @@ CPU.prototype.bt_mem = function(virt_addr, bit_offset)
 
 CPU.prototype.btc_mem = function(virt_addr, bit_offset)
 {
-    dbg_assert(bit_offset >= 0);
     var phys_addr = this.translate_address_write(virt_addr + (bit_offset >> 3) | 0);
     var bit_base = this.read8(phys_addr);
 
@@ -1398,7 +1404,6 @@ CPU.prototype.btc_mem = function(virt_addr, bit_offset)
 
 CPU.prototype.btr_mem = function(virt_addr, bit_offset)
 {
-    dbg_assert(bit_offset >= 0);
     var phys_addr = this.translate_address_write(virt_addr + (bit_offset >> 3) | 0);
     var bit_base = this.read8(phys_addr);
 
@@ -1412,7 +1417,6 @@ CPU.prototype.btr_mem = function(virt_addr, bit_offset)
 
 CPU.prototype.bts_mem = function(virt_addr, bit_offset)
 {
-    dbg_assert(bit_offset >= 0);
     var phys_addr = this.translate_address_write(virt_addr + (bit_offset >> 3) | 0);
     var bit_base = this.read8(phys_addr);
 
@@ -1432,6 +1436,7 @@ CPU.prototype.bsf16 = function(old, bit_base)
     if(bit_base === 0)
     {
         this.flags |= flag_zero;
+        this.last_result = bit_base;
 
         // not defined in the docs, but value doesn't change on my intel machine
         return old;
@@ -1453,7 +1458,7 @@ CPU.prototype.bsf32 = function(old, bit_base)
     if(bit_base === 0)
     {
         this.flags |= flag_zero;
-
+        this.last_result = bit_base;
         return old;
     }
     else
@@ -1472,6 +1477,7 @@ CPU.prototype.bsr16 = function(old, bit_base)
     if(bit_base === 0)
     {
         this.flags |= flag_zero;
+        this.last_result = bit_base;
         return old;
     }
     else
@@ -1490,6 +1496,7 @@ CPU.prototype.bsr32 = function(old, bit_base)
     if(bit_base === 0)
     {
         this.flags |= flag_zero;
+        this.last_result = bit_base;
         return old;
     }
     else
@@ -1516,4 +1523,107 @@ CPU.prototype.popcnt = function(v)
         this.flags |= flag_zero;
         return 0;
     }
+};
+
+CPU.prototype.saturate_sw_to_ub = function(v)
+{
+    dbg_assert((v & 0xFFFF0000) === 0);
+
+    let ret = v >>> 0;
+    if (ret >= 0x8000) {
+        ret = 0;
+    }
+    else if (ret > 0xFF) {
+        ret = 0xFF;
+    }
+
+    dbg_assert((ret & 0xFFFFFF00) === 0);
+    return ret;
+};
+
+CPU.prototype.saturate_sw_to_sb = function(v)
+{
+    dbg_assert((v & 0xFFFF0000) === 0);
+
+    let ret = v;
+
+    if (ret > 0xFF80) {
+        ret = ret & 0xFF;
+    }
+    else if (ret > 0x7FFF) {
+        ret = 0x80;
+    }
+    else if (ret > 0x7F) {
+        ret = 0x7F;
+    }
+
+    dbg_assert((ret & 0xFFFFFF00) === 0);
+    return ret;
+};
+
+CPU.prototype.saturate_sd_to_sw = function(v)
+{
+    let ret = v >>> 0;
+
+    if (ret > 0xFFFF8000) {
+        ret = ret & 0xFFFF;
+    }
+    else if (ret > 0x7FFFFFFF) {
+        ret = 0x8000;
+    }
+    else if (ret > 0x7FFF) {
+        ret = 0x7FFF;
+    }
+
+    dbg_assert((ret & 0xFFFF0000) === 0);
+    return ret;
+};
+
+CPU.prototype.saturate_sd_to_sb = function(v)
+{
+    let ret = v >>> 0;
+
+    if (ret > 0xFFFFFF80) {
+        ret = ret & 0xFF;
+    }
+    else if (ret > 0x7FFFFFFF) {
+        ret = 0x80;
+    }
+    else if (ret > 0x7F) {
+        ret = 0x7F;
+    }
+
+    dbg_assert((ret & 0xFFFFFF00) === 0);
+    return ret;
+};
+
+CPU.prototype.saturate_sd_to_ub = function(v)
+{
+    let ret = v | 0;
+
+    if (ret < 0) {
+        ret = 0;
+    }
+
+    dbg_assert((ret & 0xFFFFFF00) === 0);
+    return ret;
+};
+
+
+CPU.prototype.saturate_ud_to_ub = function(v)
+{
+    let ret = v >>> 0;
+
+    if (ret > 0xFF) {
+        ret = 0xFF;
+    }
+
+    dbg_assert((ret & 0xFFFFFF00) === 0);
+    return ret;
+};
+
+CPU.prototype.saturate_uw = function(v)
+{
+    dbg_assert(v >= 0);
+    return v > 0xFFFF ? 0xFFFF : v;
 };
